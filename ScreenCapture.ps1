@@ -119,7 +119,14 @@ $bForm.Location        = New-Object System.Drawing.Point(
     [int](($screen.Width - $BW_W) / 2),
     [int]($screen.Height - $BW_H - $TOTAL_W - 62)
 )
-$bForm.Add_FormClosing({ param($s,$e); $e.Cancel=$true; $bForm.Hide(); $script:bVisible=$false })
+$script:isQuitting = $false
+$bForm.Add_FormClosing({
+    param($s,$e)
+    if ($script:isQuitting) { return }
+    $e.Cancel = $true
+    $bForm.Hide()
+    $script:bVisible = $false
+})
 
 # ── Toolbar ───────────────────────────────────────────────────────────────────
 $tb = New-Object System.Windows.Forms.Panel
@@ -601,18 +608,25 @@ foreach ($b in @($btnCap, $btnBrw, $btnOCR)) {
 }
 
 # ── Right-click -> Quit (also Ctrl+Shift+Q hotkey registered below) ───────────
-$ctxMenu = New-Object System.Windows.Forms.ContextMenuStrip
-$quitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Quit Overlay")
-$quitItem.ForeColor = [System.Drawing.Color]::FromArgb(255,80,80)
-$quitItem.Add_Click({
+function Quit-OverlayApp {
+    $script:isQuitting = $true
     try { [HotkeyNW]::UnregisterHotKey($bar.Handle,1) | Out-Null } catch {}
     try { [HotkeyNW]::UnregisterHotKey($bar.Handle,2) | Out-Null } catch {}
     try { [HotkeyNW]::UnregisterHotKey($bar.Handle,3) | Out-Null } catch {}
     try { [HotkeyNW]::UnregisterHotKey($bar.Handle,4) | Out-Null } catch {}
-    [System.Windows.Forms.Application]::Exit()
-})
+    try { if ($bar) { $bar.Hide(); $bar.Close(); $bar.Dispose() } } catch {}
+    try { if ($bForm) { $bForm.Hide(); $bForm.Close(); $bForm.Dispose() } } catch {}
+    try { [System.Windows.Forms.Application]::Exit() } catch {}
+    try { [System.Environment]::Exit(0) } catch {}
+    try { Stop-Process -Id $PID -Force } catch {}
+}
+
+$ctxMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$quitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Quit Overlay")
+$quitItem.ForeColor = [System.Drawing.Color]::FromArgb(255,80,80)
+$quitItem.Add_Click({ Quit-OverlayApp })
 $ctxMenu.Items.Add($quitItem) | Out-Null
-foreach ($b in @($btnCap,$btnBrw,$btnOCR)) { $b.ContextMenuStrip=$ctxMenu }
+foreach ($b in @($btnCap,$btnBrw,$btnOCR,$bar)) { $b.ContextMenuStrip=$ctxMenu }
 
 $bar.Controls.Add($btnCap);$bar.Controls.Add($btnBrw);$bar.Controls.Add($btnOCR)
 $bar.Region=New-Object System.Drawing.Region((New-Object System.Drawing.Rectangle(0,0,$TOTAL_W,$CAP_SIZE)))
@@ -621,12 +635,13 @@ $bar.Add_Shown({
     $ex=[OV]::GetWindowLong($bar.Handle,[OV]::GWL_EXSTYLE)
     [OV]::SetWindowLong($bar.Handle,[OV]::GWL_EXSTYLE,$ex -bor [OV]::WS_EX_TOOLWINDOW) | Out-Null
     [OV]::SetWindowPos($bar.Handle,[OV]::HWND_TOPMOST,0,0,0,0,([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
-    # Register global hotkeys: Ctrl+Shift+B=browser, Ctrl+Shift+P=screenshot, Ctrl+Shift+T=OCR text
+    # Register global hotkeys: Ctrl+Shift+B=browser, Ctrl+Shift+P=screenshot, Ctrl+Shift+T=OCR text, Ctrl+Shift+Q=quit
     try {
         $script:hkw = New-Object HotkeyNW($bar.Handle)
         [HotkeyNW]::RegisterHotKey($bar.Handle,1,([HotkeyNW]::CTRL -bor [HotkeyNW]::SHIFT),0x42) | Out-Null  # B
         [HotkeyNW]::RegisterHotKey($bar.Handle,2,([HotkeyNW]::CTRL -bor [HotkeyNW]::SHIFT),0x50) | Out-Null  # P
         [HotkeyNW]::RegisterHotKey($bar.Handle,3,([HotkeyNW]::CTRL -bor [HotkeyNW]::SHIFT),0x54) | Out-Null  # T
+        [HotkeyNW]::RegisterHotKey($bar.Handle,4,([HotkeyNW]::CTRL -bor [HotkeyNW]::SHIFT),0x51) | Out-Null  # Q
     } catch {}
 })
 
@@ -642,6 +657,7 @@ $hkTimer.Add_Tick({
                 1 { $btnBrw.PerformClick() }   # Ctrl+Shift+B → toggle browser
                 2 { $btnCap.PerformClick() }   # Ctrl+Shift+P → screenshot
                 3 { $btnOCR.PerformClick() }   # Ctrl+Shift+T → OCR text
+                4 { Quit-OverlayApp }          # Ctrl+Shift+Q → Quit Overlay
             }
         }
     } catch { $hkTimer.Stop() }   # stop timer if HotkeyNW type not available
@@ -657,8 +673,7 @@ $watchTimer.Add_Tick({
     if ($running) { $script:oasEverSeen = $true }    # mark first sighting
     if ($script:oasEverSeen -and -not $running) {    # was seen, now gone
         $watchTimer.Stop()
-        if ($bForm.Visible) { $bForm.Close() }
-        [System.Windows.Forms.Application]::Exit()
+        Quit-OverlayApp
     }
 })
 $watchTimer.Start()
