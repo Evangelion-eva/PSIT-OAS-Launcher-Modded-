@@ -1,6 +1,9 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+try { [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException) } catch {}
+try { [System.Windows.Forms.Application]::add_ThreadException({ param($s,$e) }) } catch {}
+
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -386,94 +389,144 @@ function MakeCircle($x,$sz,$c1,$c2) {
     return $b
 }
 
+# Hover tooltips for the three circles
+$hoverTip = New-Object System.Windows.Forms.ToolTip
+$hoverTip.InitialDelay = 400
+$hoverTip.ReshowDelay = 200
+
 $btnCap=MakeCircle 0 $CAP_SIZE ([System.Drawing.Color]::FromArgb(255,80,145,255)) ([System.Drawing.Color]::FromArgb(255,20,65,210))
+$hoverTip.SetToolTip($btnCap, "Screenshot -> Clipboard (Ctrl+Shift+P)")
+$script:ssTimer = $null
 $btnCap.Add_Click({
+    if ($script:suppressClick) { $script:suppressClick = $false; return }
     try {
         $bar.Hide()
-        # Delay via timer so the bar visually disappears before screenshot
-        $ssTimer = New-Object System.Windows.Forms.Timer; $ssTimer.Interval=160
-        $ssTimer.Add_Tick({
-            $ssTimer.Stop(); $ssTimer.Dispose()
+        if ($script:ssTimer) { try { $script:ssTimer.Stop(); $script:ssTimer.Dispose() } catch {} }
+        $script:ssTimer = New-Object System.Windows.Forms.Timer
+        $script:ssTimer.Interval = 180
+        $script:ssTimer.Add_Tick({
+            param($sender, $args)
+            try { $sender.Stop(); $sender.Dispose() } catch {}
+            $script:ssTimer = $null
             try {
-                $bmp = New-Object System.Drawing.Bitmap($screen.Width,$screen.Height)
+                $bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
                 $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-                $gfx.CopyFromScreen(0,0,0,0,$bmp.Size); $gfx.Dispose()
-                [System.Windows.Forms.Clipboard]::SetDataObject($bmp,$true)
+                $gfx.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
+                $gfx.Dispose()
+                [System.Windows.Forms.Clipboard]::SetDataObject($bmp, $true)
                 $bmp.Dispose()
                 $bar.Show()
-                (New-Object System.Windows.Forms.ToolTip).Show("Screenshot copied!",$btnCap,0,-24,1400)
-            } catch { $bar.Show() }
+                [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+                (New-Object System.Windows.Forms.ToolTip).Show("Screenshot copied!", $btnCap, 0, -24, 1500)
+            } catch {
+                $bar.Show()
+            }
         })
-        $ssTimer.Start()
-    } catch { $bar.Show() }
+        $script:ssTimer.Start()
+    } catch {
+        $bar.Show()
+    }
 })
 
 $btnBrw=MakeCircle ($CAP_SIZE+$GAP) $BRW_SIZE ([System.Drawing.Color]::FromArgb(255,60,180,100)) ([System.Drawing.Color]::FromArgb(255,20,120,55))
+$hoverTip.SetToolTip($btnBrw, "Toggle Browser (Ctrl+Shift+B)")
 $btnBrw.Add_Click({
+    if ($script:suppressClick) { $script:suppressClick = $false; return }
     try {
-        if ($script:bVisible) {
-            $bForm.Hide(); $script:bVisible=$false
+        if ($script:bVisible -and $bForm.Visible -and $bForm.WindowState -ne [System.Windows.Forms.FormWindowState]::Minimized) {
+            $bForm.Hide()
+            $script:bVisible = $false
         } else {
-            if (!$bForm.Visible) { $bForm.Show(); $wv.EnsureCoreWebView2Async($null) | Out-Null }
+            if ($bForm.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+                $bForm.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+            }
+            if (!$bForm.Visible) {
+                $bForm.Show()
+                $wv.EnsureCoreWebView2Async($null) | Out-Null
+            }
             $bForm.BringToFront()
-            [OV]::SetWindowPos($bForm.Handle,[OV]::HWND_TOPMOST,0,0,0,0,([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
-            $ex=[OV]::GetWindowLong($bForm.Handle,[OV]::GWL_EXSTYLE)
-            [OV]::SetWindowLong($bForm.Handle,[OV]::GWL_EXSTYLE,($ex -bor [OV]::WS_EX_TOOLWINDOW) -band (-bnot [OV]::WS_EX_APPWINDOW)) | Out-Null
-            $script:bVisible=$true
+            [OV]::SetWindowPos($bForm.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+            $ex = [OV]::GetWindowLong($bForm.Handle, [OV]::GWL_EXSTYLE)
+            [OV]::SetWindowLong($bForm.Handle, [OV]::GWL_EXSTYLE, ($ex -bor [OV]::WS_EX_TOOLWINDOW) -band (-bnot [OV]::WS_EX_APPWINDOW)) | Out-Null
+            $script:bVisible = $true
         }
     } catch {}
 })
 
 # ── OCR button — isolated subprocess, all vars $script: so timer tick can see them ──
 $btnOCR = MakeCircle ($CAP_SIZE+$GAP+$BRW_SIZE+$GAP) $OCR_SIZE ([System.Drawing.Color]::FromArgb(255,230,130,20)) ([System.Drawing.Color]::FromArgb(255,160,70,5))
-$script:ocrBusy = $false
-$script:ocrImgTmp = [IO.Path]::Combine($env:TEMP,"oas_img.png")
-$script:ocrResTmp = [IO.Path]::Combine($env:TEMP,"oas_res.txt")
-$script:ocrWrkTmp = [IO.Path]::Combine($env:TEMP,"oas_wkr.ps1")
+$hoverTip.SetToolTip($btnOCR, "Extract Screen Text -> Clipboard (Ctrl+Shift+T)")
+$script:ocrBusy   = $false
+$script:ocrDelayT = $null
+$script:ocrImgTmp = [IO.Path]::Combine($env:TEMP, "oas_img_$PID.png")
+$script:ocrResTmp = [IO.Path]::Combine($env:TEMP, "oas_res_$PID.txt")
+$script:ocrWrkTmp = [IO.Path]::Combine($env:TEMP, "oas_wkr_$PID.ps1")
 $script:ocrPollN  = 0
 $script:ocrTimer  = New-Object System.Windows.Forms.Timer
-$script:ocrTimer.Interval = 600
+$script:ocrTimer.Interval = 400
 $script:ocrTimer.Add_Tick({
+    param($sender, $args)
     try {
         $script:ocrPollN++
         if (Test-Path $script:ocrResTmp) {
-            $script:ocrTimer.Stop()
+            $sender.Stop()
             $txt = (Get-Content $script:ocrResTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) + ""
-            Remove-Item $script:ocrResTmp,$script:ocrImgTmp,$script:ocrWrkTmp -Force -EA SilentlyContinue
-            $btnOCR.BackColor=[System.Drawing.Color]::Magenta; $btnOCR.Refresh()
-            $script:ocrBusy=$false
-            $txt=$txt.Trim()
+            Remove-Item $script:ocrResTmp, $script:ocrImgTmp, $script:ocrWrkTmp -Force -EA SilentlyContinue
+            $btnOCR.BackColor = [System.Drawing.Color]::Magenta
+            $btnOCR.Refresh()
+            $script:ocrBusy = $false
+            $txt = $txt.Trim()
             if ($txt -and -not $txt.StartsWith("ERR:")) {
                 [System.Windows.Forms.Clipboard]::SetText($txt)
-                (New-Object System.Windows.Forms.ToolTip).Show("Text copied ($($txt.Length) chars)",$btnOCR,0,-28,2200)
-            } else { (New-Object System.Windows.Forms.ToolTip).Show("No text found",$btnOCR,0,-28,1800) }
-        } elseif ($script:ocrPollN -gt 35) {
-            $script:ocrTimer.Stop()
-            $btnOCR.BackColor=[System.Drawing.Color]::Magenta; $btnOCR.Refresh()
-            $script:ocrBusy=$false
-            (New-Object System.Windows.Forms.ToolTip).Show("OCR timed out",$btnOCR,0,-28,2000)
+                (New-Object System.Windows.Forms.ToolTip).Show("Text copied ($($txt.Length) chars)", $btnOCR, 0, -28, 2200)
+            } else {
+                (New-Object System.Windows.Forms.ToolTip).Show("No text found", $btnOCR, 0, -28, 1800)
+            }
+        } elseif ($script:ocrPollN -gt 40) {
+            $sender.Stop()
+            Remove-Item $script:ocrResTmp, $script:ocrImgTmp, $script:ocrWrkTmp -Force -EA SilentlyContinue
+            $btnOCR.BackColor = [System.Drawing.Color]::Magenta
+            $btnOCR.Refresh()
+            $script:ocrBusy = $false
+            (New-Object System.Windows.Forms.ToolTip).Show("OCR timed out", $btnOCR, 0, -28, 2000)
         }
-    } catch { $script:ocrTimer.Stop(); $script:ocrBusy=$false; $btnOCR.BackColor=[System.Drawing.Color]::Magenta }
+    } catch {
+        try { $sender.Stop() } catch {}
+        $script:ocrBusy = $false
+        $btnOCR.BackColor = [System.Drawing.Color]::Magenta
+    }
 })
 
 $btnOCR.Add_Click({
+    if ($script:suppressClick) { $script:suppressClick = $false; return }
     try {
         if ($script:ocrBusy) { return }
-        $script:ocrBusy=$true; $script:ocrPollN=0
-        $btnOCR.BackColor=[System.Drawing.Color]::FromArgb(255,180,90,5); $btnOCR.Refresh()
+        $script:ocrBusy = $true
+        $script:ocrPollN = 0
+        $btnOCR.BackColor = [System.Drawing.Color]::FromArgb(255,180,90,5)
+        $btnOCR.Refresh()
         $bar.Hide()
-        $ocrDelayT = New-Object System.Windows.Forms.Timer; $ocrDelayT.Interval=160
-        $ocrDelayT.Add_Tick({
-            $ocrDelayT.Stop(); $ocrDelayT.Dispose()
+        if ($script:ocrDelayT) { try { $script:ocrDelayT.Stop(); $script:ocrDelayT.Dispose() } catch {} }
+        $script:ocrDelayT = New-Object System.Windows.Forms.Timer
+        $script:ocrDelayT.Interval = 180
+        $script:ocrDelayT.Add_Tick({
+            param($sender, $args)
+            try { $sender.Stop(); $sender.Dispose() } catch {}
+            $script:ocrDelayT = $null
             try {
-                $bmp = New-Object System.Drawing.Bitmap($screen.Width,$screen.Height)
+                $bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
                 $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-                $gfx.CopyFromScreen(0,0,0,0,$bmp.Size); $gfx.Dispose()
-                $bmp.Save($script:ocrImgTmp,[System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+                $gfx.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
+                $gfx.Dispose()
+                $bmp.Save($script:ocrImgTmp, [System.Drawing.Imaging.ImageFormat]::Png)
+                $bmp.Dispose()
                 $bar.Show()
+                [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
                 Remove-Item $script:ocrResTmp -Force -EA SilentlyContinue
-                # Build the worker script (uses $script: paths baked-in as literals)
-                $ip = $script:ocrImgTmp; $rp = $script:ocrResTmp
+                
+                # Build the worker script with explicit paths
+                $ip = $script:ocrImgTmp
+                $rp = $script:ocrResTmp
                 @"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime -EA SilentlyContinue
 try {
@@ -496,33 +549,58 @@ try {
                 Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$($script:ocrWrkTmp)`""
                 $script:ocrTimer.Start()
             } catch {
-                $bar.Show(); $script:ocrBusy=$false
-                $btnOCR.BackColor=[System.Drawing.Color]::Magenta
+                $bar.Show()
+                $script:ocrBusy = $false
+                $btnOCR.BackColor = [System.Drawing.Color]::Magenta
             }
         })
-        $ocrDelayT.Start()
-    } catch { $script:ocrBusy=$false; $bar.Show(); $btnOCR.BackColor=[System.Drawing.Color]::Magenta }
+        $script:ocrDelayT.Start()
+    } catch {
+        $script:ocrBusy = $false
+        $bar.Show()
+        $btnOCR.BackColor = [System.Drawing.Color]::Magenta
+    }
 })
 
-# ── Drag (threshold prevents accidental drags on quick clicks) ───────────────
-$script:drag=$false; $script:dragging=$false; $script:dPt=[System.Drawing.Point]::Empty
-foreach ($b in @($btnCap,$btnBrw,$btnOCR)) {
-    $b.Add_MouseDown({ param($s,$e)
-        if($e.Button -eq [System.Windows.Forms.MouseButtons]::Left){
-            $script:drag=$true; $script:dragging=$false; $script:dPt=[System.Windows.Forms.Cursor]::Position
+# ── Drag (threshold prevents accidental click trigger on drag) ───────────────
+$script:drag          = $false
+$script:dragging      = $false
+$script:suppressClick = $false
+$script:dPt           = [System.Drawing.Point]::Empty
+
+foreach ($b in @($btnCap, $btnBrw, $btnOCR)) {
+    $b.Add_MouseDown({
+        param($s, $e)
+        if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+            $script:drag = $true
+            $script:dragging = $false
+            $script:suppressClick = $false
+            $script:dPt = [System.Windows.Forms.Cursor]::Position
         }
     })
-    $b.Add_MouseMove({ param($s,$e)
-        if($script:drag){
-            $n=[System.Windows.Forms.Cursor]::Position
-            if([Math]::Abs($n.X-$script:dPt.X)+[Math]::Abs($n.Y-$script:dPt.Y) -gt 4){ $script:dragging=$true }
-            if($script:dragging){ $bar.Left+=$n.X-$script:dPt.X; $bar.Top+=$n.Y-$script:dPt.Y; $script:dPt=$n }
+    $b.Add_MouseMove({
+        param($s, $e)
+        if ($script:drag) {
+            $n = [System.Windows.Forms.Cursor]::Position
+            $dx = $n.X - $script:dPt.X
+            $dy = $n.Y - $script:dPt.Y
+            if ([Math]::Abs($dx) + [Math]::Abs($dy) -gt 3) {
+                $script:dragging = $true
+                $script:suppressClick = $true
+                $bar.Left += $dx
+                $bar.Top += $dy
+                $script:dPt = $n
+            }
         }
     })
-    $b.Add_MouseUp({ param($s,$e); $script:drag=$false })
+    $b.Add_MouseUp({
+        param($s, $e)
+        $script:drag = $false
+        $script:dragging = $false
+    })
 }
 
-# ── Right-click → Quit (also Ctrl+Shift+Q hotkey registered below) ───────────
+# ── Right-click -> Quit (also Ctrl+Shift+Q hotkey registered below) ───────────
 $ctxMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $quitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Quit Overlay")
 $quitItem.ForeColor = [System.Drawing.Color]::FromArgb(255,80,80)
@@ -584,9 +662,5 @@ $watchTimer.Add_Tick({
     }
 })
 $watchTimer.Start()
-
-# Suppress unhandled WinForms exceptions from crashing the process
-[System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
-[System.Windows.Forms.Application]::add_ThreadException({ param($s,$e) <# silently swallow #> })
 
 [System.Windows.Forms.Application]::Run($bar)
