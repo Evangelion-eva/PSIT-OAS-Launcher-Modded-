@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 try { [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException) } catch {}
@@ -98,6 +98,150 @@ if (!(Test-Path $core) -or !(Test-Path $wf) -or !(Test-Path $ldr)) {
 
 try { Add-Type -Path $core -ErrorAction Stop } catch { }
 try { Add-Type -Path $wf  -ErrorAction Stop } catch { }
+
+# ── AI Answer Engine ─────────────────────────────────────────────────────────
+# Load keys from keys.txt next to the script. Format: groq:<key> or openrouter:<key>
+$script:aiKeys = @()
+$keysFile = Join-Path $PSScriptRoot 'keys.txt'
+if (Test-Path $keysFile) {
+    Get-Content $keysFile | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
+        $parts = $_.Trim() -split ':', 2
+        if ($parts.Count -eq 2) {
+            $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
+        }
+    }
+}
+$script:aiKeyIndex = 0
+$script:aiLabel    = $null   # floating answer label form
+$script:aiTimer    = $null   # auto-hide timer
+
+function Invoke-AIAnswer {
+    param([string]$QuestionText)
+    if ($script:aiKeys.Count -eq 0) { return }
+
+    $prompt = "You are a student taking a multiple-choice exam. Read the question and all options carefully. Reply with ONLY: the answer letter (A, B, C, or D) followed by a dash and a reason of at most 7 words. Example: 'B - Quicksort is not stable'. No extra text."
+
+    # Try each key in rotation, skip on rate limit or error
+    $tried = 0
+    while ($tried -lt $script:aiKeys.Count) {
+        $entry = $script:aiKeys[$script:aiKeyIndex % $script:aiKeys.Count]
+        $script:aiKeyIndex++
+        $tried++
+        try {
+            $body = @{
+                model    = if ($entry.Provider -eq 'groq') { 'llama-3.1-70b-versatile' } else { 'meta-llama/llama-3.1-70b-instruct:free' }
+                messages = @(
+                    @{ role = 'system'; content = $prompt }
+                    @{ role = 'user';   content = $QuestionText }
+                )
+                max_tokens  = 40
+                temperature = 0.1
+            } | ConvertTo-Json -Depth 5
+
+            $url = if ($entry.Provider -eq 'groq') {
+                'https://api.groq.com/openai/v1/chat/completions'
+            } else {
+                'https://openrouter.ai/api/v1/chat/completions'
+            }
+
+            $headers = @{
+                'Authorization' = "Bearer $($entry.Key)"
+                'Content-Type'  = 'application/json'
+            }
+            if ($entry.Provider -eq 'openrouter') {
+                $headers['HTTP-Referer'] = 'https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-'
+                $headers['X-Title'] = 'PSIT OAS'
+            }
+
+            $resp = Invoke-RestMethod -Uri $url -Method POST -Headers $headers -Body $body -TimeoutSec 12 -ErrorAction Stop
+            $answer = $resp.choices[0].message.content.Trim()
+            return $answer
+        } catch {
+            # 429 = rate limit, try next key; anything else also try next
+            continue
+        }
+    }
+    return $null
+}
+
+function Show-AIAnswer {
+    param([string]$Answer)
+    if (-not $Answer) { return }
+
+    # Dispose previous label if exists
+    if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
+    if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
+
+    # Parse letter and reason
+    $letter = '?'
+    $reason = $Answer
+    if ($Answer -match '^([A-Da-d])\s*[-–]?\s*(.*)$') {
+        $letter = $Matches[1].ToUpper()
+        $reason = $Matches[2].Trim()
+    }
+
+    $f = New-Object System.Windows.Forms.Form
+    $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $f.BackColor       = [System.Drawing.Color]::FromArgb(20, 20, 30)
+    $f.TopMost         = $true
+    $f.ShowInTaskbar   = $false
+    $f.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
+    $f.Opacity         = 0.93
+    $f.Width           = 220
+    $f.Height          = 56
+    # Position: just above the dots bar
+    $f.Location = New-Object System.Drawing.Point($bar.Left, ($bar.Top - 62))
+
+    # Big letter badge
+    $badge = New-Object System.Windows.Forms.Label
+    $badge.Text      = $letter
+    $badge.Size      = New-Object System.Drawing.Size(48, 48)
+    $badge.Location  = New-Object System.Drawing.Point(4, 4)
+    $badge.Font      = New-Object System.Drawing.Font('Segoe UI', 22, [System.Drawing.FontStyle]::Bold)
+    $badge.ForeColor = [System.Drawing.Color]::FromArgb(255, 220, 60)
+    $badge.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 60)
+    $badge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+
+    # Reason text
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text      = if ($reason.Length -gt 60) { $reason.Substring(0,60) + '...' } else { $reason }
+    $lbl.Size      = New-Object System.Drawing.Size(162, 48)
+    $lbl.Location  = New-Object System.Drawing.Point(56, 4)
+    $lbl.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
+    $lbl.ForeColor = [System.Drawing.Color]::FromArgb(200, 200, 220)
+    $lbl.BackColor = [System.Drawing.Color]::Transparent
+
+    $f.Controls.Add($badge)
+    $f.Controls.Add($lbl)
+
+    # Click anywhere on label to dismiss
+    $dismissAction = { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; try { $f.Close(); $f.Dispose() } catch {} }
+    $f.Add_Click($dismissAction)
+    $badge.Add_Click($dismissAction)
+    $lbl.Add_Click($dismissAction)
+
+    try {
+        $null = New-Object ResizableNW($f, 0)
+    } catch {}
+
+    $f.Show()
+    [OV]::SetWindowPos($f.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+    $ex = [OV]::GetWindowLong($f.Handle, [OV]::GWL_EXSTYLE)
+    [OV]::SetWindowLong($f.Handle, [OV]::GWL_EXSTYLE, $ex -bor [OV]::WS_EX_TOOLWINDOW) | Out-Null
+    $script:aiLabel = $f
+
+    # Auto-hide after 30 seconds
+    $t = New-Object System.Windows.Forms.Timer
+    $t.Interval = 30000
+    $t.Add_Tick({
+        param($sender, $args)
+        $sender.Stop(); $sender.Dispose()
+        try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}
+        $script:aiLabel = $null
+    })
+    $t.Start()
+    $script:aiTimer = $t
+}
 
 # ── Layout constants ──────────────────────────────────────────────────────────
 $CAP_SIZE = 16; $BRW_SIZE = 16; $OCR_SIZE = 16; $GAP = 5
@@ -485,7 +629,65 @@ $script:ocrTimer.Add_Tick({
             $txt = $txt.Trim()
             if ($txt -and -not $txt.StartsWith("ERR:")) {
                 [System.Windows.Forms.Clipboard]::SetText($txt)
-                (New-Object System.Windows.Forms.ToolTip).Show("Text copied ($($txt.Length) chars)", $btnOCR, 0, -28, 2200)
+                (New-Object System.Windows.Forms.ToolTip).Show("Text copied - asking AI...", $btnOCR, 0, -28, 2200)
+                # Fire AI answer in a background runspace so UI stays responsive (PS5 compatible)
+                if ($script:aiKeys.Count -gt 0) {
+                    $capturedTxt  = $txt
+                    $capturedKeys = $script:aiKeys
+                    $capturedIdx  = $script:aiKeyIndex
+                    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                    $rs.ApartmentState = 'STA'
+                    $rs.ThreadOptions  = 'ReuseThread'
+                    $rs.Open()
+                    $rs.SessionStateProxy.SetVariable('capturedTxt', $capturedTxt)
+                    $rs.SessionStateProxy.SetVariable('aiKeys',      $capturedKeys)
+                    $rs.SessionStateProxy.SetVariable('aiKeyIndex',  $capturedIdx)
+                    $ps = [System.Management.Automation.PowerShell]::Create()
+                    $ps.Runspace = $rs
+                    $ps.AddScript({
+                        function Invoke-AIAnswerLocal {
+                            param([string]$Q)
+                            $prompt = "You are a student taking a multiple-choice exam. Read the question and all options carefully. Reply with ONLY: the answer letter (A, B, C, or D) followed by a dash and a reason of at most 7 words. Example: 'B - Quicksort is not stable'. No extra text."
+                            $idx = $aiKeyIndex; $tried = 0
+                            while ($tried -lt $aiKeys.Count) {
+                                $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
+                                try {
+                                    $body = @{
+                                        model       = if ($entry.Provider -eq 'groq') { 'llama-3.1-70b-versatile' } else { 'meta-llama/llama-3.1-70b-instruct:free' }
+                                        messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
+                                        max_tokens  = 40
+                                        temperature = 0.1
+                                    } | ConvertTo-Json -Depth 5
+                                    $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
+                                    $hdrs = @{ 'Authorization'="Bearer $($entry.Key)"; 'Content-Type'='application/json' }
+                                    if ($entry.Provider -eq 'openrouter') { $hdrs['HTTP-Referer']='https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-'; $hdrs['X-Title']='PSIT OAS' }
+                                    $resp = Invoke-RestMethod -Uri $url -Method POST -Headers $hdrs -Body $body -TimeoutSec 12 -ErrorAction Stop
+                                    return $resp.choices[0].message.content.Trim()
+                                } catch { continue }
+                            }
+                            return $null
+                        }
+                        Invoke-AIAnswerLocal -Q $capturedTxt
+                    }) | Out-Null
+                    $aHandle = $ps.BeginInvoke()
+                    $pollT = New-Object System.Windows.Forms.Timer
+                    $pollT.Interval = 300
+                    $pollT.Add_Tick({
+                        param($snd, $ev)
+                        if ($aHandle.IsCompleted) {
+                            $snd.Stop(); $snd.Dispose()
+                            try {
+                                $result = $ps.EndInvoke($aHandle)
+                                $ans = $result | Select-Object -Last 1
+                                if ($ans) { Show-AIAnswer -Answer ([string]$ans) }
+                            } catch {}
+                            try { $ps.Dispose() } catch {}
+                            try { $rs.Close(); $rs.Dispose() } catch {}
+                        }
+                    })
+                    $pollT.Start()
+                    $script:aiKeyIndex = ($capturedIdx + 1) % [Math]::Max(1, $script:aiKeys.Count)
+                }
             } else {
                 (New-Object System.Windows.Forms.ToolTip).Show("No text found", $btnOCR, 0, -28, 1800)
             }

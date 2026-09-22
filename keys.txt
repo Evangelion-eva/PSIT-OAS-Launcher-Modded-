@@ -1,0 +1,7 @@
+# PSIT OAS AI Keys — one per line
+# Format:  groq:<key>   or   openrouter:<key>
+# Lines starting with # are ignored.
+# Add as many keys as you want — they rotate automatically on rate limit.
+#
+groq:YOUR_GROQ_KEY_HERE
+openrouter:YOUR_OPENROUTER_KEY_HERE
