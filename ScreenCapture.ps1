@@ -111,9 +111,16 @@ if (Test-Path $keysFile) {
         }
     }
 }
-$script:aiKeyIndex = 0
-$script:aiLabel    = $null   # floating answer label form
-$script:aiTimer    = $null   # auto-hide timer
+$script:aiKeyIndex  = 0
+$script:aiLabel     = $null   # floating answer label form
+$script:aiTimer     = $null   # auto-hide timer
+$script:aiHandle    = $null   # async handle
+$script:aiPs        = $null   # PowerShell instance
+$script:aiRs        = $null   # Runspace instance
+$script:aiPollTimer = $null   # WinForms polling timer
+$script:latestOCRText = ""     # stores last captured question text
+$script:tabs        = @{}     # tabKey -> @{ Wv = $wv; Url = $url; Btn = $btn }
+$script:activeTab   = "Gem"   # currently active tab key
 
 function Invoke-AIAnswer {
     param([string]$QuestionText)
@@ -168,76 +175,77 @@ function Show-AIAnswer {
     param([string]$Answer)
     if (-not $Answer) { return }
 
-    # Dispose previous label if exists
     if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
     if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
 
-    # Parse letter and reason
-    $letter = '?'
-    $reason = $Answer
-    if ($Answer -match '^([A-Da-d])\s*[-–]?\s*(.*)$') {
-        $letter = $Matches[1].ToUpper()
-        $reason = $Matches[2].Trim()
-    }
+    $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
-    $f = New-Object System.Windows.Forms.Form
-    $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-    $f.BackColor       = [System.Drawing.Color]::FromArgb(20, 20, 30)
-    $f.TopMost         = $true
-    $f.ShowInTaskbar   = $false
-    $f.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
-    $f.Opacity         = 0.93
-    $f.Width           = 220
-    $f.Height          = 56
-    # Position: just above the dots bar
-    $f.Location = New-Object System.Drawing.Point($bar.Left, ($bar.Top - 62))
+    # Dynamic calculation for ANY resolution
+    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
+    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
 
-    # Big letter badge
-    $badge = New-Object System.Windows.Forms.Label
-    $badge.Text      = $letter
-    $badge.Size      = New-Object System.Drawing.Size(48, 48)
-    $badge.Location  = New-Object System.Drawing.Point(4, 4)
-    $badge.Font      = New-Object System.Drawing.Font('Segoe UI', 22, [System.Drawing.FontStyle]::Bold)
-    $badge.ForeColor = [System.Drawing.Color]::FromArgb(255, 220, 60)
-    $badge.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 60)
-    $badge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    # Clean point-to-point text
+    $firstLine = ($Answer -split "`r?`n")[0].Trim()
+    $displayText = if ($firstLine -match '^(Ans\s*[:\-])') { $firstLine } else { "Ans: $firstLine" }
 
-    # Reason text
+    $font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+    $size = [System.Windows.Forms.TextRenderer]::MeasureText($displayText, $font)
+
+    # Tight form size covering ONLY the actual text so options & questions are never blocked
+    $ansW = $size.Width + 12
+    $ansH = $size.Height + 4
+
+    $af = New-Object System.Windows.Forms.Form
+    $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $af.BackColor       = [System.Drawing.Color]::White
+    $af.TransparencyKey = [System.Drawing.Color]::White
+    $af.TopMost         = $true
+    $af.ShowInTaskbar   = $false
+    $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
+    $af.Width           = $ansW
+    $af.Height          = $ansH
+    $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
+
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = if ($reason.Length -gt 60) { $reason.Substring(0,60) + '...' } else { $reason }
-    $lbl.Size      = New-Object System.Drawing.Size(162, 48)
-    $lbl.Location  = New-Object System.Drawing.Point(56, 4)
-    $lbl.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
-    $lbl.ForeColor = [System.Drawing.Color]::FromArgb(200, 200, 220)
-    $lbl.BackColor = [System.Drawing.Color]::Transparent
+    $lbl.Text        = $displayText
+    $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
+    $lbl.Font        = $font
+    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(20, 20, 20)
+    $lbl.BackColor   = [System.Drawing.Color]::White
+    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
+    $lbl.Padding     = New-Object System.Windows.Forms.Padding(2, 0, 0, 0)
+    $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
 
-    $f.Controls.Add($badge)
-    $f.Controls.Add($lbl)
-
-    # Click anywhere on label to dismiss
-    $dismissAction = { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; try { $f.Close(); $f.Dispose() } catch {} }
-    $f.Add_Click($dismissAction)
-    $badge.Add_Click($dismissAction)
+    # Click on the text to dismiss it immediately
+    $dismissAction = {
+        if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
+        if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
+    }
+    $af.Add_Click($dismissAction)
+    $af.Add_MouseDown($dismissAction)
     $lbl.Add_Click($dismissAction)
+    $lbl.Add_MouseDown($dismissAction)
 
-    try {
-        $null = New-Object ResizableNW($f, 0)
-    } catch {}
+    $af.Controls.Add($lbl)
 
-    $f.Show()
-    [OV]::SetWindowPos($f.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
-    $ex = [OV]::GetWindowLong($f.Handle, [OV]::GWL_EXSTYLE)
-    [OV]::SetWindowLong($f.Handle, [OV]::GWL_EXSTYLE, $ex -bor [OV]::WS_EX_TOOLWINDOW) | Out-Null
-    $script:aiLabel = $f
+    $af.Show()
+    # WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x08000000 = Never steal focus from browser)
+    $ex = [OV]::GetWindowLong($af.Handle, [OV]::GWL_EXSTYLE)
+    [OV]::SetWindowLong($af.Handle, [OV]::GWL_EXSTYLE, $ex -bor [OV]::WS_EX_TOOLWINDOW -bor 0x08000000) | Out-Null
+    [OV]::SetWindowPos($af.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+    $script:aiLabel = $af
 
-    # Auto-hide after 30 seconds
+    # Auto-hide after 35 seconds (next question press replaces it sooner)
     $t = New-Object System.Windows.Forms.Timer
-    $t.Interval = 30000
+    $t.Interval = 35000
     $t.Add_Tick({
         param($sender, $args)
         $sender.Stop(); $sender.Dispose()
-        try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}
-        $script:aiLabel = $null
+        if ($script:aiLabel) {
+            try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}
+            $script:aiLabel = $null
+        }
     })
     $t.Start()
     $script:aiTimer = $t
@@ -248,13 +256,13 @@ $CAP_SIZE = 16; $BRW_SIZE = 16; $OCR_SIZE = 16; $GAP = 5
 $TOTAL_W  = $CAP_SIZE + $GAP + $BRW_SIZE + $GAP + $OCR_SIZE
 $screen   = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $script:bVisible = $false
-$BW_W = 360; $BW_H = 420
+$BW_W = 420; $BW_H = 460
 
 # ── Browser window ────────────────────────────────────────────────────────────
 $bForm = New-Object System.Windows.Forms.Form
 $bForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $bForm.Size            = New-Object System.Drawing.Size($BW_W, $BW_H)
-$bForm.MinimumSize     = New-Object System.Drawing.Size(240, 200)
+$bForm.MinimumSize     = New-Object System.Drawing.Size(260, 220)
 $bForm.TopMost         = $true
 $bForm.ShowInTaskbar   = $false
 $bForm.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
@@ -291,47 +299,53 @@ function MakeTBtn($txt,$x,$w,$bg) {
 $dk  = [System.Drawing.Color]::FromArgb(48,48,66)
 $bl  = [System.Drawing.Color]::FromArgb(35,90,210)
 $rd  = [System.Drawing.Color]::FromArgb(180,40,40)
+$grn = [System.Drawing.Color]::FromArgb(24,128,56)
+$pur = [System.Drawing.Color]::FromArgb(110,50,180)
 
-$tBack = MakeTBtn "<"   4  24 $dk
-$tFwd  = MakeTBtn ">"   30 24 $dk
-$tRld  = MakeTBtn "R"   56 24 $dk
+$tBack = MakeTBtn "<"    3  22 $dk
+$tFwd  = MakeTBtn ">"   27  22 $dk
+$tRld  = MakeTBtn "R"   51  22 $dk
 
 $tURL  = New-Object System.Windows.Forms.TextBox
-$tURL.Location=New-Object System.Drawing.Point(82,7); $tURL.Size=New-Object System.Drawing.Size(168,20)
+$tURL.Location=New-Object System.Drawing.Point(75,7); $tURL.Size=New-Object System.Drawing.Size(155,20)
 $tURL.BackColor=[System.Drawing.Color]::FromArgb(46,46,64); $tURL.ForeColor=[System.Drawing.Color]::White
 $tURL.BorderStyle=[System.Windows.Forms.BorderStyle]::FixedSingle
-$tURL.Font=New-Object System.Drawing.Font("Segoe UI",8); $tURL.Text="https://www.google.com"
+$tURL.Font=New-Object System.Drawing.Font("Segoe UI",8); $tURL.Text="https://gemini.google.com"
 
-$tGo   = MakeTBtn "Go"  253 26 $bl
-$tZin  = MakeTBtn "+"   281 24 $dk
-$tZout = MakeTBtn "-"   336 24 $dk
-
-# Zoom level label between Z+ and Z-
-$zoomLbl = New-Object System.Windows.Forms.Label
+$tGo      = MakeTBtn "Go"   232 24 $bl
+$tAddQ    = MakeTBtn "+Q"   258 26 $grn
+$tAddLink = MakeTBtn "+Link" 286 42 $pur
+$tZin     = MakeTBtn "+"    330 20 $dk
+$zoomLbl  = New-Object System.Windows.Forms.Label
 $zoomLbl.Text = "100%"
-$zoomLbl.Location = New-Object System.Drawing.Point(307, 8)
-$zoomLbl.Size     = New-Object System.Drawing.Size(27, 18)
+$zoomLbl.Location = New-Object System.Drawing.Point(352, 8)
+$zoomLbl.Size     = New-Object System.Drawing.Size(26, 18)
 $zoomLbl.ForeColor = [System.Drawing.Color]::FromArgb(180,180,210)
-$zoomLbl.Font     = New-Object System.Drawing.Font("Segoe UI",6.5,[System.Drawing.FontStyle]::Bold)
+$zoomLbl.Font     = New-Object System.Drawing.Font("Segoe UI",6,[System.Drawing.FontStyle]::Bold)
 $zoomLbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+$tZout    = MakeTBtn "-"    380 20 $dk
 
-$tb.Controls.AddRange(@($tBack,$tFwd,$tRld,$tURL,$tGo,$tZin,$zoomLbl,$tZout))
+$tbTip = New-Object System.Windows.Forms.ToolTip
+$tbTip.SetToolTip($tAddQ, "Paste OCR Question text into Chat")
+$tbTip.SetToolTip($tAddLink, "Paste current URL into Chat")
+
+$tb.Controls.AddRange(@($tBack,$tFwd,$tRld,$tURL,$tGo,$tAddQ,$tAddLink,$tZin,$zoomLbl,$tZout))
 
 # ── Drag handle (title bar area) ──────────────────────────────────────────────
 $dragLbl = New-Object System.Windows.Forms.Label
-$dragLbl.Text=" Browser"; $dragLbl.Size=New-Object System.Drawing.Size(0,34)
+$dragLbl.Text="  Browser (Tabs)"; $dragLbl.Size=New-Object System.Drawing.Size(0,26)
 $dragLbl.Dock=[System.Windows.Forms.DockStyle]::Fill
 $dragLbl.ForeColor=[System.Drawing.Color]::FromArgb(160,160,190)
-$dragLbl.Font=New-Object System.Drawing.Font("Segoe UI",8)
+$dragLbl.Font=New-Object System.Drawing.Font("Segoe UI",8,[System.Drawing.FontStyle]::Bold)
 $dragLbl.TextAlign=[System.Drawing.ContentAlignment]::MiddleLeft
 $dragLbl.SendToBack()
 
 $closeBtn = MakeTBtn "X" 0 0 $rd
-$closeBtn.Size=New-Object System.Drawing.Size(28,34); $closeBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-28),0)
+$closeBtn.Size=New-Object System.Drawing.Size(28,26); $closeBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-28),0)
 $closeBtn.FlatAppearance.BorderSize=0; $closeBtn.Dock=[System.Windows.Forms.DockStyle]::None
 
 $minBtn = MakeTBtn "-" 0 0 ([System.Drawing.Color]::FromArgb(60,60,80))
-$minBtn.Size=New-Object System.Drawing.Size(28,34); $minBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-56),0)
+$minBtn.Size=New-Object System.Drawing.Size(28,26); $minBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-56),0)
 $minBtn.FlatAppearance.BorderSize=0; $minBtn.Dock=[System.Windows.Forms.DockStyle]::None
 
 $titleBar = New-Object System.Windows.Forms.Panel
@@ -356,51 +370,146 @@ $grip.Add_MouseMove({
     param($s,$e)
     if ($script:rDrag) {
         $n=[System.Windows.Forms.Cursor]::Position
-        $nw=[Math]::Max(240,$bForm.Width+$n.X-$script:rPt.X)
-        $nh=[Math]::Max(200,$bForm.Height+$n.Y-$script:rPt.Y)
+        $nw=[Math]::Max(260,$bForm.Width+$n.X-$script:rPt.X)
+        $nh=[Math]::Max(220,$bForm.Height+$n.Y-$script:rPt.Y)
         $bForm.Size=New-Object System.Drawing.Size($nw,$nh)
         $closeBtn.Location=New-Object System.Drawing.Point($bForm.Width-28,0)
+        $minBtn.Location=New-Object System.Drawing.Point($bForm.Width-56,0)
         $script:rPt=$n
     }
 })
 $grip.Add_MouseUp({ $script:rDrag=$false })
 
-# ── WebView2 control ──────────────────────────────────────────────────────────
-$wv = New-Object Microsoft.Web.WebView2.WinForms.WebView2
-$wv.Dock = [System.Windows.Forms.DockStyle]::Fill
-$wv.CreationProperties = New-Object Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties
-$wv.CreationProperties.UserDataFolder = "$env:TEMP\OAS_WV2"
+# ── WebView2 Multi-Tab Host Panel ─────────────────────────────────────────────
+$wvHost = New-Object System.Windows.Forms.Panel
+$wvHost.Dock = [System.Windows.Forms.DockStyle]::Fill
 
-$wv.Add_CoreWebView2InitializationCompleted({
-    param($s,$e)
-    if ($e.IsSuccess) {
-        $wv.CoreWebView2.Settings.AreDefaultContextMenusEnabled  = $true
-        $wv.CoreWebView2.Settings.IsStatusBarEnabled             = $false
-        $wv.CoreWebView2.Settings.IsZoomControlEnabled           = $true
-        $wv.CoreWebView2.Navigate("https://www.google.com")
-        # Update URL bar on navigation
-        $wv.CoreWebView2.add_NavigationCompleted({
-            param($src,$ev)
-            $tURL.Text = $wv.CoreWebView2.Source
+$script:tabs = @{}
+$script:activeTab = ""
+
+$script:wvEnvProps = New-Object Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties
+$script:wvEnvProps.UserDataFolder = "$env:TEMP\OAS_WV2"
+
+function Get-ActiveWv {
+    if ($script:tabs -and $script:tabs.ContainsKey($script:activeTab)) {
+        return $script:tabs[$script:activeTab].Wv
+    }
+    return $null
+}
+
+# ── AI Shortcuts Tabs Bar ─────────────────────────────────────────────────────
+$aiBar = New-Object System.Windows.Forms.Panel
+$aiBar.Dock      = [System.Windows.Forms.DockStyle]::Top
+$aiBar.Height    = 28
+$aiBar.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 32)
+$aiTip = New-Object System.Windows.Forms.ToolTip
+
+$script:aiList = @(
+    @{L="Gem";   C=[System.Drawing.Color]::FromArgb(66,103,212);  U="https://gemini.google.com";                                        T="Google Gemini"},
+    @{L="Ael";   C=[System.Drawing.Color]::FromArgb(90,40,180);   U="https://aeliusai.com/";                                            T="Aelius AI (Images & PDFs)"},
+    @{L="Ima";   C=[System.Drawing.Color]::FromArgb(210,70,50);   U="https://imastudio.com/chat-with-image";                           T="Ima Studio (Chat with Image)"},
+    @{L="Pix";   C=[System.Drawing.Color]::FromArgb(40,160,180);  U="https://pixpal.chat/";                                             T="PixPal (Chat & Images)"},
+    @{L="Jolly"; C=[System.Drawing.Color]::FromArgb(220,130,20);  U="https://jollyai.online/models/ai-chatbot-unlimited-messages.php"; T="JollyAI (Unlimited Chat)"},
+    @{L="Duck";  C=[System.Drawing.Color]::FromArgb(222,88,51);   U="https://duck.ai/";                                                T="Duck.ai"},
+    @{L="Yia";   C=[System.Drawing.Color]::FromArgb(50,140,90);   U="https://www.yiaho.com/en/";                                        T="Yiaho AI"}
+)
+
+function Switch-BrowserTab($tabKey, $tabUrl) {
+    if (-not $script:tabs.ContainsKey($tabKey)) {
+        $newWv = New-Object Microsoft.Web.WebView2.WinForms.WebView2
+        $newWv.Dock = [System.Windows.Forms.DockStyle]::Fill
+        $newWv.CreationProperties = $script:wvEnvProps
+        $newWv.Tag = @{ Key = $tabKey; Url = $tabUrl }
+        $newWv.Add_CoreWebView2InitializationCompleted({
+            param($s,$e)
+            if ($e.IsSuccess) {
+                $tag = $s.Tag
+                $s.CoreWebView2.Settings.AreDefaultContextMenusEnabled  = $true
+                $s.CoreWebView2.Settings.IsStatusBarEnabled             = $false
+                $s.CoreWebView2.Settings.IsZoomControlEnabled           = $true
+                if ($tag -and $tag.Url) {
+                    $s.CoreWebView2.Navigate($tag.Url)
+                }
+            }
         })
+        $newWv.Add_NavigationCompleted({
+            param($s,$e)
+            if ($s.Tag -and $script:activeTab -eq $s.Tag.Key -and $s.Source) {
+                $tURL.Text = $s.Source.AbsoluteUri
+            }
+        })
+        $wvHost.Controls.Add($newWv)
+        $newWv.EnsureCoreWebView2Async($null) | Out-Null
+        $script:tabs[$tabKey] = @{ Wv = $newWv; Url = $tabUrl; Key = $tabKey }
     }
+
+    $script:activeTab = $tabKey
+
+    foreach ($k in $script:tabs.Keys) {
+        $entry = $script:tabs[$k]
+        if ($k -eq $tabKey) {
+            $entry.Wv.Visible = $true
+            $entry.Wv.BringToFront()
+            if ($entry.Wv.Source) {
+                $tURL.Text = $entry.Wv.Source.AbsoluteUri
+            } elseif ($entry.Url) {
+                $tURL.Text = $entry.Url
+            }
+        } else {
+            $entry.Wv.Visible = $false
+        }
+    }
+
+    # Update tab button borders to reflect active tab
+    foreach ($ctl in $aiBar.Controls) {
+        if ($ctl.Tag -and $ctl.Tag.Key -eq $tabKey) {
+            $ctl.FlatAppearance.BorderColor = [System.Drawing.Color]::White
+            $ctl.FlatAppearance.BorderSize  = 2
+        } else {
+            $ctl.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(55,55,75)
+            $ctl.FlatAppearance.BorderSize  = 1
+        }
+    }
+}
+
+$ax = 4
+foreach ($ai in $script:aiList) {
+    $ab = New-Object System.Windows.Forms.Button
+    $ab.Text     = $ai.L
+    $ab.Size     = New-Object System.Drawing.Size(46, 22)
+    $ab.Location = New-Object System.Drawing.Point($ax, 3)
+    $ab.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $ab.FlatAppearance.BorderSize  = 1
+    $ab.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(55,55,75)
+    $ab.BackColor = $ai.C
+    $ab.ForeColor = [System.Drawing.Color]::White
+    $ab.Font      = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
+    $ab.Cursor    = [System.Windows.Forms.Cursors]::Hand
+    $ab.Tag       = @{ Key = $ai.L; Url = $ai.U }
+    $aiTip.SetToolTip($ab, $ai.T)
+    $ab.Add_Click({
+        param($s,$e)
+        if ($s.Tag) {
+            Switch-BrowserTab $s.Tag.Key $s.Tag.Url
+        }
+    })
+    $aiBar.Controls.Add($ab)
+    $ax += 48
+}
+
+# ── Toolbar Actions for Active Tab ────────────────────────────────────────────
+$tBack.Add_Click({ $w = Get-ActiveWv; if($w -and $w.CoreWebView2){ $w.CoreWebView2.GoBack() } })
+$tFwd.Add_Click({  $w = Get-ActiveWv; if($w -and $w.CoreWebView2){ $w.CoreWebView2.GoForward() } })
+$tRld.Add_Click({  $w = Get-ActiveWv; if($w -and $w.CoreWebView2){ $w.CoreWebView2.Reload() } })
+$tGo.Add_Click({
+    $w = Get-ActiveWv
+    $raw = $tURL.Text.Trim()
+    if ($raw -match '^https?://') { $url = $raw }
+    elseif ($raw -match '^(localhost|[a-zA-Z0-9][a-zA-Z0-9\-]*(\.[a-zA-Z]{2,})+)(:[0-9]+)?(/.*)?$') { $url = "https://$raw" }
+    else { $url = "https://www.google.com/search?q=" + [Uri]::EscapeDataString($raw) }
+    if ($w -and $w.CoreWebView2) { $w.CoreWebView2.Navigate($url) }
 })
 
-# Toolbar actions
-$tBack.Add_Click({ if($wv.CoreWebView2){ $wv.CoreWebView2.GoBack() } })
-$tFwd.Add_Click({  if($wv.CoreWebView2){ $wv.CoreWebView2.GoForward() } })
-$tRld.Add_Click({  if($wv.CoreWebView2){ $wv.CoreWebView2.Reload() } })
-$tGo.Add_Click({
-    $raw = $tURL.Text.Trim()
-    if ($raw -match '^https?://') {
-        $url = $raw
-    } elseif ($raw -match '^(localhost|[a-zA-Z0-9][a-zA-Z0-9\-]*(\.[a-zA-Z]{2,})+)(:[0-9]+)?(/.*)?$') {
-        $url = "https://$raw"
-    } else {
-        $url = "https://www.google.com/search?q=" + [Uri]::EscapeDataString($raw)
-    }
-    if ($wv.CoreWebView2) { $wv.CoreWebView2.Navigate($url) }
-})
 $tURL.Add_KeyDown({
     param($s,$e)
     if ($e.Control -and $e.KeyCode -eq [System.Windows.Forms.Keys]::A) {
@@ -409,10 +518,76 @@ $tURL.Add_KeyDown({
         $tGo.PerformClick(); $e.Handled=$true; $e.SuppressKeyPress=$true
     }
 })
-$tZin.Add_Click({  if($wv.CoreWebView2){ $wv.ZoomFactor=[Math]::Min(3.0,$wv.ZoomFactor+0.25); $zoomLbl.Text=[int]($wv.ZoomFactor*100)+"%" } })
-$tZout.Add_Click({ if($wv.CoreWebView2){ $wv.ZoomFactor=[Math]::Max(0.25,$wv.ZoomFactor-0.25); $zoomLbl.Text=[int]($wv.ZoomFactor*100)+"%" } })
 
-# Drag title bar — native OS drag via WM_NCLBUTTONDOWN/HTCAPTION (works even with WebView2)
+$tZin.Add_Click({  $w = Get-ActiveWv; if($w -and $w.CoreWebView2){ $w.ZoomFactor=[Math]::Min(3.0,$w.ZoomFactor+0.25); $zoomLbl.Text=[int]($w.ZoomFactor*100)+"%" } })
+$tZout.Add_Click({ $w = Get-ActiveWv; if($w -and $w.CoreWebView2){ $w.ZoomFactor=[Math]::Max(0.25,$w.ZoomFactor-0.25); $zoomLbl.Text=[int]($w.ZoomFactor*100)+"%" } })
+
+# Paste OCR Question directly into active chat box
+$tAddQ.Add_Click({
+    $w = Get-ActiveWv
+    if ($w -and $w.CoreWebView2 -and $script:latestOCRText) {
+        [System.Windows.Forms.Clipboard]::SetText($script:latestOCRText)
+        $qEsc = $script:latestOCRText.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
+        $js = @"
+(function() {
+    let t = "$qEsc";
+    let el = document.activeElement;
+    if (!el || el === document.body || el.tagName === 'IFRAME') {
+        el = document.querySelector('textarea, div[contenteditable="true"], input[type="text"], [role="textbox"]');
+    }
+    if (el) {
+        el.focus();
+        if (el.isContentEditable) {
+            el.innerText = (el.innerText ? el.innerText + ' ' : '') + t;
+        } else {
+            el.value = (el.value ? el.value + ' ' : '') + t;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+})();
+"@
+        $w.CoreWebView2.ExecuteScriptAsync($js) | Out-Null
+        (New-Object System.Windows.Forms.ToolTip).Show("Question pasted into chat!", $tAddQ, 0, -26, 1600)
+    } elseif (-not $script:latestOCRText) {
+        (New-Object System.Windows.Forms.ToolTip).Show("No OCR question captured yet", $tAddQ, 0, -26, 1600)
+    }
+})
+
+# Paste URL directly into active chat box
+$tAddLink.Add_Click({
+    $w = Get-ActiveWv
+    if ($w -and $w.CoreWebView2) {
+        $u = $w.CoreWebView2.Source
+        if ($u) {
+            [System.Windows.Forms.Clipboard]::SetText($u)
+            $uEsc = $u.Replace('\', '\\').Replace('"', '\"')
+            $js = @"
+(function() {
+    let t = "$uEsc";
+    let el = document.activeElement;
+    if (!el || el === document.body || el.tagName === 'IFRAME') {
+        el = document.querySelector('textarea, div[contenteditable="true"], input[type="text"], [role="textbox"]');
+    }
+    if (el) {
+        el.focus();
+        if (el.isContentEditable) {
+            el.innerText = (el.innerText ? el.innerText + ' ' : '') + t;
+        } else {
+            el.value = (el.value ? el.value + ' ' : '') + t;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+})();
+"@
+            $w.CoreWebView2.ExecuteScriptAsync($js) | Out-Null
+            (New-Object System.Windows.Forms.ToolTip).Show("URL pasted into chat!", $tAddLink, 0, -26, 1600)
+        }
+    }
+})
+
+# Drag title bar
 foreach ($ctl in @($titleBar,$dragLbl)) {
     $ctl.Add_MouseDown({
         param($s,$e)
@@ -423,42 +598,7 @@ foreach ($ctl in @($titleBar,$dragLbl)) {
     })
 }
 
-# ── AI Shortcuts bar ────────────────────────────────────────────────────────
-$aiBar = New-Object System.Windows.Forms.Panel
-$aiBar.Dock      = [System.Windows.Forms.DockStyle]::Top
-$aiBar.Height    = 28
-$aiBar.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 32)
-$aiTip = New-Object System.Windows.Forms.ToolTip
-$aiList = @(
-    @{L="Gem"; C=[System.Drawing.Color]::FromArgb(66,103,212);  U="https://gemini.google.com";       T="Google Gemini"},
-    @{L="GPT"; C=[System.Drawing.Color]::FromArgb(16,163,127);  U="https://chatgpt.com";             T="ChatGPT"},
-    @{L="Cld"; C=[System.Drawing.Color]::FromArgb(200,100,40);  U="https://claude.ai";               T="Claude (Anthropic)"},
-    @{L="Pplx";C=[System.Drawing.Color]::FromArgb(24,140,145);  U="https://www.perplexity.ai";      T="Perplexity AI"},
-    @{L="Co";  C=[System.Drawing.Color]::FromArgb(0,114,198);   U="https://copilot.microsoft.com";  T="Microsoft Copilot"},
-    @{L="DS";  C=[System.Drawing.Color]::FromArgb(14,118,188);  U="https://chat.deepseek.com";      T="DeepSeek"},
-    @{L="Meta";C=[System.Drawing.Color]::FromArgb(24,119,242);  U="https://www.meta.ai";            T="Meta AI"}
-)
-$ax = 4
-foreach ($ai in $aiList) {
-    $ab = New-Object System.Windows.Forms.Button
-    $ab.Text     = $ai.L
-    $ab.Size     = New-Object System.Drawing.Size(44, 22)
-    $ab.Location = New-Object System.Drawing.Point($ax, 3)
-    $ab.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $ab.FlatAppearance.BorderSize  = 1
-    $ab.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(55,55,75)
-    $ab.BackColor = $ai.C
-    $ab.ForeColor = [System.Drawing.Color]::White
-    $ab.Font      = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
-    $ab.Cursor    = [System.Windows.Forms.Cursors]::Hand
-    $ab.Tag       = $ai.U
-    $aiTip.SetToolTip($ab, $ai.T)
-    $ab.Add_Click({ param($s,$e); if ($wv.CoreWebView2) { $wv.CoreWebView2.Navigate($s.Tag) } })
-    $aiBar.Controls.Add($ab)
-    $ax += 46
-}
-
-# ── Left / Right edge resize panels (sit above WebView2 so they receive mouse) ────
+# ── Left / Right edge resize panels ───────────────────────────────────────────
 $rRight = New-Object System.Windows.Forms.Panel
 $rRight.Width=5; $rRight.Dock=[System.Windows.Forms.DockStyle]::Right
 $rRight.BackColor=[System.Drawing.Color]::FromArgb(24,24,34)
@@ -468,7 +608,7 @@ $rRight.Add_MouseDown({ $script:rrDrag=$true; $script:rrPt=[System.Windows.Forms
 $rRight.Add_MouseMove({
     if($script:rrDrag){
         $n=[System.Windows.Forms.Cursor]::Position
-        $nw=[Math]::Max(240,$bForm.Width+$n.X-$script:rrPt.X)
+        $nw=[Math]::Max(260,$bForm.Width+$n.X-$script:rrPt.X)
         $bForm.Width=$nw
         $closeBtn.Location=New-Object System.Drawing.Point($bForm.Width-28,0)
         $minBtn.Location=New-Object System.Drawing.Point($bForm.Width-56,0)
@@ -487,27 +627,28 @@ $rLeft.Add_MouseMove({
     if($script:rlDrag){
         $n=[System.Windows.Forms.Cursor]::Position
         $delta=$n.X-$script:rlPt.X
-        $nw=[Math]::Max(240,$script:rlW-$delta)
+        $nw=[Math]::Max(260,$script:rlW-$delta)
         $bForm.Left=$script:rlLeft+($script:rlW-$nw)
         $bForm.Width=$nw
         $closeBtn.Location=New-Object System.Drawing.Point($bForm.Width-28,0)
         $minBtn.Location=New-Object System.Drawing.Point($bForm.Width-56,0)
+        $script:rlPt=$n
     }
 })
 $rLeft.Add_MouseUp({ $script:rlDrag=$false })
 
 # Assemble browser form
-$bForm.Controls.Add($wv)        # fill
+$bForm.Controls.Add($wvHost)    # multi-tab host fill
 $bForm.Controls.Add($grip)      # bottom strip
 $bForm.Controls.Add($rRight)    # right resize edge
 $bForm.Controls.Add($rLeft)     # left resize edge
-$bForm.Controls.Add($aiBar)     # AI shortcuts row
+$bForm.Controls.Add($aiBar)     # AI shortcuts tab row
 $bForm.Controls.Add($tb)        # toolbar
 $bForm.Controls.Add($titleBar)  # title bar (top)
 
 $bForm.Add_Shown({
-    $wv.EnsureCoreWebView2Async($null) | Out-Null
-    try { $null = New-Object ResizableNW($bForm, 6) } catch { }   # all-edge resize
+    Switch-BrowserTab "Gem" "https://gemini.google.com"
+    try { $null = New-Object ResizableNW($bForm, 6) } catch { }
 })
 
 # ── Main overlay bar ──────────────────────────────────────────────────────────
@@ -593,7 +734,9 @@ $btnBrw.Add_Click({
             }
             if (!$bForm.Visible) {
                 $bForm.Show()
-                $wv.EnsureCoreWebView2Async($null) | Out-Null
+                $w = Get-ActiveWv
+                if ($w) { $w.EnsureCoreWebView2Async($null) | Out-Null }
+                else { Switch-BrowserTab "Gem" "https://gemini.google.com" }
             }
             $bForm.BringToFront()
             [OV]::SetWindowPos($bForm.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
@@ -628,6 +771,7 @@ $script:ocrTimer.Add_Tick({
             $script:ocrBusy = $false
             $txt = $txt.Trim()
             if ($txt -and -not $txt.StartsWith("ERR:")) {
+                $script:latestOCRText = $txt
                 [System.Windows.Forms.Clipboard]::SetText($txt)
                 (New-Object System.Windows.Forms.ToolTip).Show("Text copied - asking AI...", $btnOCR, 0, -28, 2200)
                 # Fire AI answer in a background runspace so UI stays responsive (PS5 compatible)
@@ -647,45 +791,72 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are a student taking a multiple-choice exam. Read the question and all options carefully. Reply with ONLY: the answer letter (A, B, C, or D) followed by a dash and a reason of at most 7 words. Example: 'B - Quicksort is not stable'. No extra text."
+                            $prompt = "You are a student taking a multiple-choice exam. Read the question and all options carefully. Reply with ONLY the answer letter followed by the matching option text in brackets. Format exactly like this example: 'C (Diamond)'. One line, nothing else."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
                                 try {
+                                    $modelName = if ($entry.Provider -eq 'groq') { 'qwen/qwen3.8-27b' } else { 'openrouter/free' }
                                     $body = @{
-                                        model       = if ($entry.Provider -eq 'groq') { 'llama-3.1-70b-versatile' } else { 'meta-llama/llama-3.1-70b-instruct:free' }
+                                        model       = $modelName
                                         messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                        max_tokens  = 40
+                                        max_tokens  = 80
                                         temperature = 0.1
                                     } | ConvertTo-Json -Depth 5
                                     $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
                                     $hdrs = @{ 'Authorization'="Bearer $($entry.Key)"; 'Content-Type'='application/json' }
                                     if ($entry.Provider -eq 'openrouter') { $hdrs['HTTP-Referer']='https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-'; $hdrs['X-Title']='PSIT OAS' }
-                                    $resp = Invoke-RestMethod -Uri $url -Method POST -Headers $hdrs -Body $body -TimeoutSec 12 -ErrorAction Stop
-                                    return $resp.choices[0].message.content.Trim()
+                                    $resp = Invoke-RestMethod -Uri $url -Method POST -Headers $hdrs -Body $body -TimeoutSec 10 -ErrorAction Stop
+                                    $rawAns = $null
+                                    if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
+                                        $msg = $resp.choices[0].message
+                                        if ($msg.content) {
+                                            $rawAns = [string]$msg.content
+                                        } elseif ($msg.reasoning) {
+                                            $rawAns = [string]$msg.reasoning
+                                        }
+                                    }
+                                    if ($rawAns) {
+                                        return $rawAns.Trim()
+                                    }
                                 } catch { continue }
                             }
                             return $null
                         }
                         Invoke-AIAnswerLocal -Q $capturedTxt
                     }) | Out-Null
-                    $aHandle = $ps.BeginInvoke()
-                    $pollT = New-Object System.Windows.Forms.Timer
-                    $pollT.Interval = 300
-                    $pollT.Add_Tick({
+                    $script:aiRs = $rs
+                    $script:aiPs = $ps
+                    $script:aiHandle = $ps.BeginInvoke()
+                    if ($script:aiPollTimer) {
+                        try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}
+                        $script:aiPollTimer = $null
+                    }
+                    $script:aiPollTimer = New-Object System.Windows.Forms.Timer
+                    $script:aiPollTimer.Interval = 60
+                    $script:aiPollTimer.Add_Tick({
                         param($snd, $ev)
-                        if ($aHandle.IsCompleted) {
-                            $snd.Stop(); $snd.Dispose()
-                            try {
-                                $result = $ps.EndInvoke($aHandle)
+                        try {
+                            if ($script:aiHandle -and $script:aiHandle.IsCompleted) {
+                                $snd.Stop(); $snd.Dispose()
+                                $script:aiPollTimer = $null
+                                $result = $script:aiPs.EndInvoke($script:aiHandle)
                                 $ans = $result | Select-Object -Last 1
-                                if ($ans) { Show-AIAnswer -Answer ([string]$ans) }
-                            } catch {}
-                            try { $ps.Dispose() } catch {}
-                            try { $rs.Close(); $rs.Dispose() } catch {}
+                                if ($ans) {
+                                    Show-AIAnswer -Answer ([string]$ans)
+                                }
+                                try { $script:aiPs.Dispose() } catch {}
+                                try { $script:aiRs.Close(); $script:aiRs.Dispose() } catch {}
+                                $script:aiHandle = $null
+                                $script:aiPs     = $null
+                                $script:aiRs     = $null
+                            }
+                        } catch {
+                            try { $snd.Stop(); $snd.Dispose() } catch {}
+                            $script:aiPollTimer = $null
                         }
                     })
-                    $pollT.Start()
+                    $script:aiPollTimer.Start()
                     $script:aiKeyIndex = ($capturedIdx + 1) % [Math]::Max(1, $script:aiKeys.Count)
                 }
             } else {

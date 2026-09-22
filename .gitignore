@@ -1,0 +1,8 @@
+# Git ignore — never commit API keys or build artifacts
+keys.txt
+*.cab
+build_temp/
+scratch_test.msi
+*.bak
+wv2sdk/
+*.base.msi

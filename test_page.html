@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PSIT OAS — Test Question</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; }
+
+  .topbar {
+    background: #2c6fad; color: white;
+    padding: 8px 16px; font-size: 13px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .topbar span { font-weight: bold; }
+
+  .subbar {
+    background: #3a82c4; color: white;
+    padding: 5px 16px; font-size: 12px;
+    display: flex; gap: 20px;
+  }
+  .subbar .active {
+    background: white; color: #2c6fad;
+    padding: 2px 10px; border-radius: 3px; font-weight: bold;
+  }
+
+  .timebar {
+    background: #e8e8e8; border-bottom: 1px solid #ccc;
+    padding: 5px 16px; font-size: 12px; text-align: right;
+  }
+  .markbar {
+    background: #fff; border-bottom: 1px solid #ddd;
+    padding: 4px 16px; font-size: 11px; color: #555; text-align: right;
+  }
+
+  .layout { display: flex; height: calc(100vh - 115px); }
+
+  .question-area {
+    flex: 1; padding: 24px 32px; background: white;
+    border-right: 1px solid #ddd; overflow-y: auto;
+  }
+  .q-label { font-size: 13px; font-weight: bold; margin-bottom: 14px; color: #333; }
+  .q-text  { font-size: 14px; color: #222; margin-bottom: 20px; }
+  .option  { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 14px; cursor: pointer; }
+  .option input { width: 15px; height: 15px; cursor: pointer; }
+
+  .sidebar {
+    width: 220px; background: #f9f9f9; padding: 12px;
+    font-size: 12px; overflow-y: auto;
+  }
+  .sidebar h4 { margin-bottom: 10px; color: #444; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  .dot-green  { background: #28a745; }
+  .dot-red    { background: #e63946; }
+  .dot-grey   { background: #aaa; }
+  .dot-purple { background: #7b2d8b; }
+  .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
+  .grid button {
+    padding: 6px; border: 1px solid #ccc; border-radius: 4px;
+    background: #fff; cursor: pointer; font-size: 12px;
+    transition: background 0.15s;
+  }
+  .grid button:hover { background: #e0e9f5; }
+  .grid button.current { background: #e63946; color: white; border-color: #c00; }
+
+  .btnbar {
+    padding: 10px 20px; background: #f0f0f0;
+    border-top: 1px solid #ccc; display: flex; gap: 10px;
+  }
+  .btnbar button {
+    padding: 7px 18px; border: none; border-radius: 4px;
+    font-size: 13px; cursor: pointer; font-weight: bold;
+  }
+  .btn-save   { background: #28a745; color: white; }
+  .btn-clear  { background: #6c757d; color: white; }
+  .btn-next   { background: #2c6fad; color: white; }
+
+  /* Shuffle question set */
+  .shuffle-bar {
+    padding: 8px 20px; background: #fff8e1; border-bottom: 1px solid #ffe082;
+    font-size: 12px; color: #555; display: flex; gap: 16px; align-items: center;
+  }
+  .shuffle-bar button {
+    padding: 4px 12px; background: #2c6fad; color: white;
+    border: none; border-radius: 3px; cursor: pointer; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span>Physics &nbsp; | &nbsp; Group 1 &nbsp; Group 2</span>
+  <span>Question Paper &nbsp; Instructions &nbsp; Useful Data &nbsp; | &nbsp; Shravan Di...</span>
+</div>
+<div class="subbar">
+  <span class="active">Section 1</span>
+  <span>Section 2</span>
+</div>
+<div class="timebar">Time Left &nbsp; <b id="timer">9:49</b></div>
+<div class="markbar">Marks for correct answer 1.0 | Negative Marks 0.0</div>
+<div class="shuffle-bar">
+  <span>Test question set:</span>
+  <button onclick="loadQ(0)">Q1 — Hardest substance</button>
+  <button onclick="loadQ(1)">Q2 — Planets in solar system</button>
+  <button onclick="loadQ(2)">Q3 — Speed of light</button>
+  <button onclick="loadQ(3)">Q4 — CPU full form</button>
+  <button onclick="loadQ(4)">Q5 — Water chemical formula</button>
+</div>
+
+<div class="layout">
+  <div class="question-area">
+    <div class="q-label" id="qLabel">Question No:1</div>
+    <div class="q-text"  id="qText">The hardest substance available on earth is</div>
+    <div id="optList"></div>
+  </div>
+
+  <div class="sidebar">
+    <div class="legend">
+      <span><span class="dot dot-green"></span> Answered 1</span>
+      <span><span class="dot dot-grey"></span> Not Answered</span>
+      <span><span class="dot dot-red"></span> Not Visited</span>
+      <span><span class="dot dot-purple"></span> Marked for Review</span>
+    </div>
+    <h4>Section1 — Choose a Question</h4>
+    <div class="grid" id="qGrid"></div>
+  </div>
+</div>
+
+<div class="btnbar">
+  <button class="btn-save">Save &amp; Next</button>
+  <button class="btn-clear">Clear Response</button>
+  <button class="btn-next">Next &raquo;</button>
+</div>
+
+<script>
+const questions = [
+  {
+    q: "The hardest substance available on earth is",
+    opts: ["Gold", "Iron", "Diamond", "Platinum"],
+    ans: 2
+  },
+  {
+    q: "How many planets are there in our solar system?",
+    opts: ["6", "7", "8", "9"],
+    ans: 2
+  },
+  {
+    q: "The speed of light in vacuum is approximately",
+    opts: ["3 x 10^6 m/s", "3 x 10^8 m/s", "3 x 10^10 m/s", "3 x 10^12 m/s"],
+    ans: 1
+  },
+  {
+    q: "CPU stands for",
+    opts: ["Central Processing Unit", "Central Program Utility", "Computer Processing Unit", "Core Processing Unit"],
+    ans: 0
+  },
+  {
+    q: "The chemical formula of water is",
+    opts: ["H2O2", "HO", "H2O", "H3O"],
+    ans: 2
+  },
+  {
+    q: "Which data structure operates on a Last In First Out (LIFO) basis?",
+    opts: ["Queue", "Stack", "Tree", "Graph"],
+    ans: 1
+  },
+  {
+    q: "What is the average time complexity of binary search on a sorted array?",
+    opts: ["O(n)", "O(log n)", "O(n^2)", "O(1)"],
+    ans: 1
+  },
+  {
+    q: "Which protocol is used to securely transfer web pages over the internet?",
+    opts: ["HTTP", "FTP", "HTTPS", "SMTP"],
+    ans: 2
+  },
+  {
+    q: "Which planet in our solar system is commonly known as the Red Planet?",
+    opts: ["Venus", "Mars", "Jupiter", "Saturn"],
+    ans: 1
+  },
+  {
+    q: "In Python, which keyword is used to define a function?",
+    opts: ["function", "def", "func", "define"],
+    ans: 1
+  },
+  {
+    q: "Which type of memory is volatile and loses its content when power is turned off?",
+    opts: ["ROM", "RAM", "Hard Disk", "Flash Drive"],
+    ans: 1
+  },
+  {
+    q: "Which of the following is an open-source relational database management system?",
+    opts: ["PostgreSQL", "Photoshop", "Docker", "Windows 11"],
+    ans: 0
+  }
+];
+
+let currentQ = 0;
+
+function loadQ(idx) {
+  currentQ = idx;
+  const q = questions[idx];
+  document.getElementById('qLabel').textContent = 'Question No:' + (idx + 1);
+  document.getElementById('qText').textContent = q.q;
+  const ol = document.getElementById('optList');
+  ol.innerHTML = '';
+  const letters = ['A','B','C','D'];
+  q.opts.forEach((opt, i) => {
+    const d = document.createElement('div');
+    d.className = 'option';
+    d.innerHTML = '<input type="radio" name="opt" value="' + i + '" id="o' + i + '">' +
+                  '<label for="o' + i + '">' + opt + '</label>';
+    ol.appendChild(d);
+  });
+  // highlight grid
+  document.querySelectorAll('.grid button').forEach((b,i) => {
+    b.className = i === idx ? 'current' : '';
+  });
+}
+
+// Build grid
+const grid = document.getElementById('qGrid');
+for (let i = 0; i < 12; i++) {
+  const b = document.createElement('button');
+  b.textContent = i + 1;
+  if (i < questions.length) b.onclick = () => loadQ(i);
+  grid.appendChild(b);
+}
+
+loadQ(0);
+
+document.querySelector('.btn-next').onclick = () => loadQ((currentQ + 1) % questions.length);
+document.querySelector('.btn-save').onclick = () => loadQ((currentQ + 1) % questions.length);
+document.querySelector('.btn-clear').onclick = () => {
+  const c = document.querySelector('input[name="opt"]:checked');
+  if (c) c.checked = false;
+};
+
+// Countdown timer
+let secs = 9 * 60 + 49;
+setInterval(() => {
+  if (secs <= 0) return;
+  secs--;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  document.getElementById('timer').textContent = m + ':' + String(s).padStart(2,'0');
+}, 1000);
+</script>
+</body>
+</html>
