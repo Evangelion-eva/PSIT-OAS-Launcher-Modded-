@@ -178,35 +178,48 @@ function Show-AIAnswer {
     if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
     if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
 
-    # Clean markdown and formatting
-    $cleanRaw = $Answer.Replace('**', '').Replace('*', '').Replace('`', '').Trim()
+        # Clean markdown and formatting (preserve math asterisks)
+    $cleanRaw = $Answer.Replace('**', '').Replace('`', '').Trim()
     $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 
     $displayText = ""
 
-    # Priority 1: Match standard 'X (Option Text)' anywhere in output
+    # Priority 1: Check for explicit "correct (answer|option) is X" or "Ans: X"
     foreach ($line in $lines) {
-        if ($line -match '([A-D]\s*\([^\)]+\))') {
-            $displayText = "Ans: " + $matches[1].Trim()
+        if ($line -match '(?i)(?:correct\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*|^Ans(?:wer)?\s*[:\-]\s*)([A-D]\s*[\)\.\:\-]?\s*\(?[^
+]+)') {
+            $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
             break
         }
     }
 
-    # Priority 2: Match 'Ans: X - Option' or 'X. Option'
+    # Priority 2: Line starting with option letter, e.g. "B (O(N log N)...)" or "C (Diamond)"
     if (-not $displayText) {
         foreach ($line in $lines) {
-            if ($line -match '^(?:(?:Ans(?:wer)?|Option)\s*[:\-]\s*)?([A-D]\s*[\)\.\:\-]\s*.+)$') {
-                $displayText = "Ans: " + $matches[1].Trim()
+            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^
+]+\))$') {
+                $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
             }
         }
     }
 
-    # Priority 3: Match any line starting with option letter
+    # Priority 3: Standalone 'X (Option Text)' anywhere in line
     if (-not $displayText) {
         foreach ($line in $lines) {
-            if ($line -match '^[A-D]') {
-                $displayText = "Ans: " + $line
+            if ($line -match '\b([A-D]\s*\([^
+]+\))') {
+                $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
+                break
+            }
+        }
+    }
+
+    # Priority 4: Line starting with an option letter like "B" or "B. Something"
+    if (-not $displayText) {
+        foreach ($line in $lines) {
+            if ($line -match '^[A-D]\b') {
+                $displayText = "Ans: " + $line.TrimEnd('.')
                 break
             }
         }

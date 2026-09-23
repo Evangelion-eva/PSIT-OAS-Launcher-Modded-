@@ -17,8 +17,9 @@
   .subbar {
     background: #3a82c4; color: white;
     padding: 5px 16px; font-size: 12px;
-    display: flex; gap: 20px;
+    display: flex; justify-content: space-between; align-items: center;
   }
+  .subbar-tabs { display: flex; gap: 20px; align-items: center; }
   .subbar .active {
     background: white; color: #2c6fad;
     padding: 2px 10px; border-radius: 3px; font-weight: bold;
@@ -33,6 +34,18 @@
     padding: 4px 16px; font-size: 11px; color: #555; text-align: right;
   }
 
+  .mode-switch {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .mode-btn {
+    padding: 3px 10px; font-size: 11px; font-weight: bold;
+    border: 1px solid rgba(255,255,255,0.6); border-radius: 3px;
+    background: rgba(255,255,255,0.2); color: white; cursor: pointer;
+  }
+  .mode-btn.active-mode {
+    background: #ffe082; color: #333; border-color: #f57f17;
+  }
+
   .layout { display: flex; height: calc(100vh - 115px); }
 
   .question-area {
@@ -40,9 +53,9 @@
     border-right: 1px solid #ddd; overflow-y: auto;
   }
   .q-label { font-size: 13px; font-weight: bold; margin-bottom: 14px; color: #333; }
-  .q-text  { font-size: 14px; color: #222; margin-bottom: 20px; }
-  .option  { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 14px; cursor: pointer; }
-  .option input { width: 15px; height: 15px; cursor: pointer; }
+  .q-text  { font-size: 14px; color: #222; margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap; }
+  .option  { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; font-size: 14px; cursor: pointer; line-height: 1.4; }
+  .option input { width: 16px; height: 16px; cursor: pointer; margin-top: 2px; }
 
   .sidebar {
     width: 220px; background: #f9f9f9; padding: 12px;
@@ -76,54 +89,42 @@
   .btn-save   { background: #28a745; color: white; }
   .btn-clear  { background: #6c757d; color: white; }
   .btn-next   { background: #2c6fad; color: white; }
-
-  /* Shuffle question set */
-  .shuffle-bar {
-    padding: 8px 20px; background: #fff8e1; border-bottom: 1px solid #ffe082;
-    font-size: 12px; color: #555; display: flex; gap: 16px; align-items: center;
-  }
-  .shuffle-bar button {
-    padding: 4px 12px; background: #2c6fad; color: white;
-    border: none; border-radius: 3px; cursor: pointer; font-size: 12px;
-  }
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <span>Physics &nbsp; | &nbsp; Group 1 &nbsp; Group 2</span>
-  <span>Question Paper &nbsp; Instructions &nbsp; Useful Data &nbsp; | &nbsp; Shravan Di...</span>
+  <span>Computer Science &amp; Engineering &nbsp; | &nbsp; Exam Simulation</span>
+  <span>Question Paper &nbsp; Instructions &nbsp; Useful Data &nbsp; | &nbsp; Candidate Roll: 21005201...</span>
 </div>
 <div class="subbar">
-  <span class="active">Section 1</span>
-  <span>Section 2</span>
+  <div class="subbar-tabs">
+    <span class="active">Section 1</span>
+    <span>Section 2</span>
+  </div>
+  <div class="mode-switch">
+    <button class="mode-btn active-mode" id="btnNormalMode" onclick="setMode('normal')">Standard Questions (1-12)</button>
+    <button class="mode-btn" id="btnBreakMode" onclick="setMode('break')">💥 Break-Test Mode (Tough Edge Cases)</button>
+  </div>
 </div>
-<div class="timebar">Time Left &nbsp; <b id="timer">9:49</b></div>
-<div class="markbar">Marks for correct answer 1.0 | Negative Marks 0.0</div>
-<div class="shuffle-bar">
-  <span>Test question set:</span>
-  <button onclick="loadQ(0)">Q1 — Hardest substance</button>
-  <button onclick="loadQ(1)">Q2 — Planets in solar system</button>
-  <button onclick="loadQ(2)">Q3 — Speed of light</button>
-  <button onclick="loadQ(3)">Q4 — CPU full form</button>
-  <button onclick="loadQ(4)">Q5 — Water chemical formula</button>
-</div>
+<div class="timebar">Time Left: <strong id="timer">09:49</strong></div>
+<div class="markbar">Marks for correct answer: 1.00 &nbsp;|&nbsp; Negative Marks: 0.25</div>
 
 <div class="layout">
   <div class="question-area">
-    <div class="q-label" id="qLabel">Question No:1</div>
-    <div class="q-text"  id="qText">The hardest substance available on earth is</div>
+    <div class="q-label" id="qLabel">Question No: 1</div>
+    <div class="q-text" id="qText"></div>
     <div id="optList"></div>
   </div>
 
   <div class="sidebar">
+    <h4>Question Palette</h4>
     <div class="legend">
-      <span><span class="dot dot-green"></span> Answered 1</span>
-      <span><span class="dot dot-grey"></span> Not Answered</span>
-      <span><span class="dot dot-red"></span> Not Visited</span>
-      <span><span class="dot dot-purple"></span> Marked for Review</span>
+      <span><span class="dot dot-green"></span> Answered</span>
+      <span><span class="dot dot-red"></span> Not Answered</span>
+      <span><span class="dot dot-grey"></span> Not Visited</span>
+      <span><span class="dot dot-purple"></span> Review</span>
     </div>
-    <h4>Section1 — Choose a Question</h4>
     <div class="grid" id="qGrid"></div>
   </div>
 </div>
@@ -131,20 +132,20 @@
 <div class="btnbar">
   <button class="btn-save">Save &amp; Next</button>
   <button class="btn-clear">Clear Response</button>
-  <button class="btn-next">Next &raquo;</button>
+  <button class="btn-next">Next &gt;</button>
 </div>
 
 <script>
-const questions = [
+const standardQuestions = [
   {
-    q: "The hardest substance available on earth is",
-    opts: ["Gold", "Iron", "Diamond", "Platinum"],
+    q: "The hardest allotrope of carbon is",
+    opts: ["Graphite", "Fullerene", "Diamond", "Graphene"],
     ans: 2
   },
   {
-    q: "How many planets are there in our solar system?",
-    opts: ["6", "7", "8", "9"],
-    ans: 2
+    q: "Which of the following sorting algorithms has the best worst-case time complexity?",
+    opts: ["Bubble Sort - O(n^2)", "Merge Sort - O(n log n)", "Quick Sort - O(n^2)", "Selection Sort - O(n^2)"],
+    ans: 1
   },
   {
     q: "The speed of light in vacuum is approximately",
@@ -198,12 +199,111 @@ const questions = [
   }
 ];
 
+// Tough edge-cases designed to stress test OCR, parser, nested math, and flexible UI wrapping
+const breakQuestions = [
+  {
+    q: "Consider the following recursive algorithm for divide-and-conquer matrix multiplication:\nT(N) = 7 * T(N/2) + Theta(N^2)\nAccording to Master's Theorem, what is the asymptotic runtime complexity?",
+    opts: [
+      "Theta(N^2 log N)",
+      "Theta(N^(log2 7)) ≈ O(N^2.807) [Strassen Algorithm]",
+      "Theta(N^3) [Standard Naive Matrix Multiplication]",
+      "O(N log N) & theta(N^2)"
+    ],
+    ans: 1
+  },
+  {
+    q: "In an Operating System with demand paging, if a system has 4 page frames (initially empty) and the memory reference string is:\n7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1\nWhat is the total number of page faults incurred using the Least Recently Used (LRU) page replacement algorithm?",
+    opts: [
+      "12 Page Faults (LRU keeps most recently referenced frame active)",
+      "15 Page Faults (FIFO suffers Belady Anomaly)",
+      "9 Page Faults (Optimal Offline Clairvoyant)",
+      "18 Page Faults (Thrashing condition with dirty page writes)"
+    ],
+    ans: 0
+  },
+  {
+    q: "Which of the following statements regarding C++11 std::vector and memory allocation is FALSE?",
+    opts: [
+      "std::vector elements are guaranteed to be stored contiguously in memory.",
+      "Pushing to a full vector invalidates existing iterators when reallocation occurs.",
+      "The capacity() of a std::vector always automatically shrinks when pop_back() is invoked.",
+      "shrink_to_fit() is a non-binding request to reduce capacity to match size()."
+    ],
+    ans: 2
+  },
+  {
+    q: "Balance the following redox equation in an acidic aqueous medium:\nMnO4^- + Fe^2+ + H^+ -> Mn^2+ + Fe^3+ + H2O\nWhat is the stoichiometric ratio of MnO4^- to Fe^2+ in the balanced reaction?",
+    opts: [
+      "1:5 (1 MnO4^- oxidizes 5 Fe^2+ with 8 H^+ producing 5 Fe^3+ + Mn^2+ + 4 H2O)",
+      "1:1 (Direct single electron equivalence)",
+      "2:5 (Permanganate disproportionation ratio)",
+      "1:3 (Three-electron transfer stoichiometry)"
+    ],
+    ans: 0
+  },
+  {
+    q: "Given Planck's constant h = 6.626 x 10^-34 J*s and speed of light c = 3.0 x 10^8 m/s, what is the energy of a single photon having a wavelength lambda = 500 nm (5.0 x 10^-7 m)?",
+    opts: [
+      "3.98 x 10^-19 Joules (approx 2.48 eV)",
+      "1.98 x 10^-25 Joules",
+      "6.63 x 10^-34 Joules",
+      "4.52 x 10^-15 Joules"
+    ],
+    ans: 0
+  },
+  {
+    q: "In relational database theory, if a relation R(A, B, C, D) has the Functional Dependencies F = { A -> B, B -> C, C -> D, D -> A }, which normal form does relation R strictly satisfy?",
+    opts: [
+      "BCNF (Boyce-Codd Normal Form) because every determinant is a candidate superkey",
+      "3NF only, violating BCNF on transitive closure dependencies",
+      "2NF only, due to partial functional dependencies on non-prime attributes",
+      "1NF only, because composite multi-valued attributes exist"
+    ],
+    ans: 0
+  },
+  {
+    q: "Consider the following Python snippet:\n\ndef make_funcs():\n    return [lambda x, i=i: x + i for i in range(4)]\n\nprint([f(10) for f in make_funcs()])\nWhat is the exact stdout output?",
+    opts: [
+      "[10, 11, 12, 13]",
+      "[13, 13, 13, 13] (late binding closure without default argument)",
+      "[10, 10, 10, 10]",
+      "TypeError: missing positional argument 'i'"
+    ],
+    ans: 0
+  },
+  {
+    q: "In TCP network congestion control, what exact event triggers the sender to enter Fast Retransmit and Fast Recovery?",
+    opts: [
+      "Receipt of 3 duplicate ACKs (Triple Duplicate ACK) without waiting for RTO timeout",
+      "Expiration of the Retransmission Timeout (RTO) timer causing ssthresh = cwnd / 2",
+      "Receipt of an ICMP Destination Unreachable packet from the default gateway",
+      "Zero-window probe timeout from the TCP receiver window buffer exhaustion"
+    ],
+    ans: 0
+  }
+];
+
+let questions = standardQuestions;
 let currentQ = 0;
+
+function setMode(mode) {
+  if (mode === 'break') {
+    questions = breakQuestions;
+    document.getElementById('btnBreakMode').className = 'mode-btn active-mode';
+    document.getElementById('btnNormalMode').className = 'mode-btn';
+  } else {
+    questions = standardQuestions;
+    document.getElementById('btnNormalMode').className = 'mode-btn active-mode';
+    document.getElementById('btnBreakMode').className = 'mode-btn';
+  }
+  buildGrid();
+  loadQ(0);
+}
 
 function loadQ(idx) {
   currentQ = idx;
   const q = questions[idx];
-  document.getElementById('qLabel').textContent = 'Question No:' + (idx + 1);
+  document.getElementById('qLabel').textContent = 'Question No: ' + (idx + 1);
   document.getElementById('qText').textContent = q.q;
   const ol = document.getElementById('optList');
   ol.innerHTML = '';
@@ -212,7 +312,7 @@ function loadQ(idx) {
     const d = document.createElement('div');
     d.className = 'option';
     d.innerHTML = '<input type="radio" name="opt" value="' + i + '" id="o' + i + '">' +
-                  '<label for="o' + i + '">' + opt + '</label>';
+                  '<label for="o' + i + '"><strong>' + letters[i] + '.</strong> ' + opt + '</label>';
     ol.appendChild(d);
   });
   // highlight grid
@@ -221,15 +321,18 @@ function loadQ(idx) {
   });
 }
 
-// Build grid
-const grid = document.getElementById('qGrid');
-for (let i = 0; i < 12; i++) {
-  const b = document.createElement('button');
-  b.textContent = i + 1;
-  if (i < questions.length) b.onclick = () => loadQ(i);
-  grid.appendChild(b);
+function buildGrid() {
+  const grid = document.getElementById('qGrid');
+  grid.innerHTML = '';
+  for (let i = 0; i < questions.length; i++) {
+    const b = document.createElement('button');
+    b.textContent = i + 1;
+    b.onclick = () => loadQ(i);
+    grid.appendChild(b);
+  }
 }
 
+buildGrid();
 loadQ(0);
 
 document.querySelector('.btn-next').onclick = () => loadQ((currentQ + 1) % questions.length);
