@@ -5,6 +5,22 @@
 <title>PSIT OAS — Assessment & Aptitude Simulation</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  *:focus, *:focus-visible, *:active {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  button, input, select, textarea {
+    outline: none !important;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:focus, button:focus-visible, button:active {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  .grid button:focus, .grid button:active, .grid button:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+  }
   body { font-family: Arial, sans-serif; background: #f5f5f5; }
 
   .topbar {

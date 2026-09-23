@@ -186,7 +186,8 @@ function Show-AIAnswer {
 
     # Priority 1: Check for explicit "correct (answer|option) is X" or "Ans: X"
     foreach ($line in $lines) {
-        if ($line -match '(?i)(?:correct\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*|^Ans(?:wer)?\s*[:\-]\s*)([A-D]\s*[\)\.\:\-]?\s*\(?[^
+        if ($line -match '(?i)(?:correct\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*|^Ans(?:wer)?\s*[:\-]\s*)([A-D]\s*[\)\.\:\-]?\s*\(?[^
+
 ]+)') {
             $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
             break
@@ -196,7 +197,8 @@ function Show-AIAnswer {
     # Priority 2: Line starting with option letter, e.g. "B (O(N log N)...)" or "C (Diamond)"
     if (-not $displayText) {
         foreach ($line in $lines) {
-            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^
+            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^
+
 ]+\))$') {
                 $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
@@ -207,7 +209,8 @@ function Show-AIAnswer {
     # Priority 3: Standalone 'X (Option Text)' anywhere in line
     if (-not $displayText) {
         foreach ($line in $lines) {
-            if ($line -match '\b([A-D]\s*\([^
+            if ($line -match '\b([A-D]\s*\([^
+
 ]+\))') {
                 $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
@@ -364,7 +367,8 @@ function MakeTBtn($txt,$x,$w,$bg) {
     $b.FlatAppearance.BorderSize=1; $b.BackColor=$bg
     $b.ForeColor=[System.Drawing.Color]::White
     $b.Font=New-Object System.Drawing.Font("Segoe UI",8,[System.Drawing.FontStyle]::Bold)
-    $b.Cursor=[System.Windows.Forms.Cursors]::Hand; return $b
+    $b.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $b.TabStop=$false; return $b
 }
 $dk  = [System.Drawing.Color]::FromArgb(48,48,66)
 $bl  = [System.Drawing.Color]::FromArgb(35,90,210)
@@ -412,11 +416,11 @@ $dragLbl.SendToBack()
 
 $closeBtn = MakeTBtn "X" 0 0 $rd
 $closeBtn.Size=New-Object System.Drawing.Size(28,26); $closeBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-28),0)
-$closeBtn.FlatAppearance.BorderSize=0; $closeBtn.Dock=[System.Windows.Forms.DockStyle]::None
+$closeBtn.FlatAppearance.BorderSize=0; $closeBtn.Dock=[System.Windows.Forms.DockStyle]::None; $closeBtn.TabStop=$false
 
 $minBtn = MakeTBtn "-" 0 0 ([System.Drawing.Color]::FromArgb(60,60,80))
 $minBtn.Size=New-Object System.Drawing.Size(28,26); $minBtn.Location=New-Object System.Drawing.Point(([int]$BW_W-56),0)
-$minBtn.FlatAppearance.BorderSize=0; $minBtn.Dock=[System.Windows.Forms.DockStyle]::None
+$minBtn.FlatAppearance.BorderSize=0; $minBtn.Dock=[System.Windows.Forms.DockStyle]::None; $minBtn.TabStop=$false
 
 $titleBar = New-Object System.Windows.Forms.Panel
 $titleBar.Dock=[System.Windows.Forms.DockStyle]::Top; $titleBar.Height=26
@@ -556,6 +560,7 @@ foreach ($ai in $script:aiList) {
     $ab.Font      = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
     $ab.Cursor    = [System.Windows.Forms.Cursors]::Hand
     $ab.Tag       = @{ Key = $ai.L; Url = $ai.U }
+    $ab.TabStop   = $false
     $aiTip.SetToolTip($ab, $ai.T)
     $ab.Add_Click({
         param($s,$e)
@@ -734,6 +739,7 @@ function MakeCircle($x,$sz,$c1,$c2) {
     $b=New-Object System.Windows.Forms.Button
     $b.Size=New-Object System.Drawing.Size($sz,$sz); $b.Location=New-Object System.Drawing.Point($x,0)
     $b.FlatStyle=[System.Windows.Forms.FlatStyle]::Flat; $b.FlatAppearance.BorderSize=0
+    $b.TabStop=$false
     $b.BackColor=[System.Drawing.Color]::Magenta; $b.Text=""; $b.Cursor=[System.Windows.Forms.Cursors]::Hand
     $b.Tag=@{C1=$c1;C2=$c2;Sz=$sz}
     $b.Add_Paint({
@@ -874,9 +880,32 @@ $script:ocrTimer.Add_Tick({
                                         temperature = 0.1
                                     } | ConvertTo-Json -Depth 5
                                     $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
-                                    $hdrs = @{ 'Authorization'="Bearer $($entry.Key)"; 'Content-Type'='application/json' }
-                                    if ($entry.Provider -eq 'openrouter') { $hdrs['HTTP-Referer']='https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-'; $hdrs['X-Title']='PSIT OAS' }
-                                    $resp = Invoke-RestMethod -Uri $url -Method POST -Headers $hdrs -Body $body -TimeoutSec 10 -ErrorAction Stop
+                                    
+                                    # Force UTF-8 HTTP request and response decoding (prevents PS5.1 Invoke-RestMethod Mojibake Â/â...)
+                                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                                    $req = [System.Net.HttpWebRequest]::Create($url)
+                                    $req.Method = "POST"
+                                    $req.ContentType = "application/json; charset=utf-8"
+                                    $req.Headers.Add("Authorization", "Bearer $($entry.Key)")
+                                    if ($entry.Provider -eq 'openrouter') {
+                                        $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
+                                        $req.Headers.Add("X-Title", "PSIT OAS")
+                                    }
+                                    $req.Timeout = 10000
+
+                                    $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                                    $req.ContentLength = $postBytes.Length
+                                    $postStream = $req.GetRequestStream()
+                                    $postStream.Write($postBytes, 0, $postBytes.Length)
+                                    $postStream.Close()
+
+                                    $httpResp = $req.GetResponse()
+                                    $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                    $rawJson = $sr.ReadToEnd()
+                                    $sr.Close()
+                                    $httpResp.Close()
+
+                                    $resp = $rawJson | ConvertFrom-Json
                                     $rawAns = $null
                                     if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
                                         $msg = $resp.choices[0].message
