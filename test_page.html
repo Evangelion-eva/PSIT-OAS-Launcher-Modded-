@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>PSIT OAS — Test Question</title>
+<title>PSIT OAS — Assessment & Aptitude Simulation</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #f5f5f5; }
@@ -19,7 +19,7 @@
     padding: 5px 16px; font-size: 12px;
     display: flex; justify-content: space-between; align-items: center;
   }
-  .subbar-tabs { display: flex; gap: 20px; align-items: center; }
+  .subbar-tabs { display: flex; gap: 12px; align-items: center; }
   .subbar .active {
     background: white; color: #2c6fad;
     padding: 2px 10px; border-radius: 3px; font-weight: bold;
@@ -35,13 +35,15 @@
   }
 
   .mode-switch {
-    display: flex; gap: 8px; align-items: center;
+    display: flex; gap: 6px; align-items: center;
   }
   .mode-btn {
-    padding: 3px 10px; font-size: 11px; font-weight: bold;
+    padding: 3px 8px; font-size: 11px; font-weight: bold;
     border: 1px solid rgba(255,255,255,0.6); border-radius: 3px;
     background: rgba(255,255,255,0.2); color: white; cursor: pointer;
+    transition: all 0.15s ease;
   }
+  .mode-btn:hover { background: rgba(255,255,255,0.35); }
   .mode-btn.active-mode {
     background: #ffe082; color: #333; border-color: #f57f17;
   }
@@ -52,8 +54,9 @@
     flex: 1; padding: 24px 32px; background: white;
     border-right: 1px solid #ddd; overflow-y: auto;
   }
-  .q-label { font-size: 13px; font-weight: bold; margin-bottom: 14px; color: #333; }
-  .q-text  { font-size: 14px; color: #222; margin-bottom: 20px; line-height: 1.5; white-space: pre-wrap; }
+  .q-category { font-size: 11px; font-weight: bold; color: #777; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .q-label { font-size: 14px; font-weight: bold; margin-bottom: 14px; color: #333; }
+  .q-text  { font-size: 14px; color: #222; margin-bottom: 20px; line-height: 1.55; white-space: pre-wrap; }
   .option  { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; font-size: 14px; cursor: pointer; line-height: 1.4; }
   .option input { width: 16px; height: 16px; cursor: pointer; margin-top: 2px; }
 
@@ -94,17 +97,17 @@
 <body>
 
 <div class="topbar">
-  <span>Computer Science &amp; Engineering &nbsp; | &nbsp; Exam Simulation</span>
-  <span>Question Paper &nbsp; Instructions &nbsp; Useful Data &nbsp; | &nbsp; Candidate Roll: 21005201...</span>
+  <span>PSIT Online Assessment System &nbsp; | &nbsp; Placement &amp; Aptitude Test</span>
+  <span>Question Paper &nbsp; Instructions &nbsp; Useful Data &nbsp; | &nbsp; Candidate: Shravan Di...</span>
 </div>
 <div class="subbar">
   <div class="subbar-tabs">
-    <span class="active">Section 1</span>
-    <span>Section 2</span>
+    <span class="active" id="sectionTitle">Section 1: General &amp; Technical</span>
   </div>
   <div class="mode-switch">
-    <button class="mode-btn active-mode" id="btnNormalMode" onclick="setMode('normal')">Standard Questions (1-12)</button>
-    <button class="mode-btn" id="btnBreakMode" onclick="setMode('break')">💥 Break-Test Mode (Tough Edge Cases)</button>
+    <button class="mode-btn active-mode" id="btnNormalMode" onclick="setMode('normal')">Standard CS (1-12)</button>
+    <button class="mode-btn" id="btnReasoningMode" onclick="setMode('reasoning')">🧭 Reasoning (Direction &amp; Seating)</button>
+    <button class="mode-btn" id="btnBreakMode" onclick="setMode('break')">💥 Break-Test (Edge Cases)</button>
   </div>
 </div>
 <div class="timebar">Time Left: <strong id="timer">09:49</strong></div>
@@ -112,6 +115,7 @@
 
 <div class="layout">
   <div class="question-area">
+    <div class="q-category" id="qCategory">Computer Science</div>
     <div class="q-label" id="qLabel">Question No: 1</div>
     <div class="q-text" id="qText"></div>
     <div id="optList"></div>
@@ -136,72 +140,178 @@
 </div>
 
 <script>
+// 1. Standard Technical & CS Questions
 const standardQuestions = [
   {
+    cat: "Materials & Chemistry",
     q: "The hardest allotrope of carbon is",
     opts: ["Graphite", "Fullerene", "Diamond", "Graphene"],
     ans: 2
   },
   {
+    cat: "Algorithms & Complexity",
     q: "Which of the following sorting algorithms has the best worst-case time complexity?",
     opts: ["Bubble Sort - O(n^2)", "Merge Sort - O(n log n)", "Quick Sort - O(n^2)", "Selection Sort - O(n^2)"],
     ans: 1
   },
   {
+    cat: "Physics",
     q: "The speed of light in vacuum is approximately",
     opts: ["3 x 10^6 m/s", "3 x 10^8 m/s", "3 x 10^10 m/s", "3 x 10^12 m/s"],
     ans: 1
   },
   {
+    cat: "Computer Architecture",
     q: "CPU stands for",
     opts: ["Central Processing Unit", "Central Program Utility", "Computer Processing Unit", "Core Processing Unit"],
     ans: 0
   },
   {
+    cat: "General Science",
     q: "The chemical formula of water is",
     opts: ["H2O2", "HO", "H2O", "H3O"],
     ans: 2
   },
   {
+    cat: "Data Structures",
     q: "Which data structure operates on a Last In First Out (LIFO) basis?",
     opts: ["Queue", "Stack", "Tree", "Graph"],
     ans: 1
   },
   {
+    cat: "Algorithms",
     q: "What is the average time complexity of binary search on a sorted array?",
     opts: ["O(n)", "O(log n)", "O(n^2)", "O(1)"],
     ans: 1
   },
   {
+    cat: "Computer Networks",
     q: "Which protocol is used to securely transfer web pages over the internet?",
     opts: ["HTTP", "FTP", "HTTPS", "SMTP"],
     ans: 2
   },
   {
+    cat: "General Knowledge",
     q: "Which planet in our solar system is commonly known as the Red Planet?",
     opts: ["Venus", "Mars", "Jupiter", "Saturn"],
     ans: 1
   },
   {
+    cat: "Programming",
     q: "In Python, which keyword is used to define a function?",
     opts: ["function", "def", "func", "define"],
     ans: 1
   },
   {
+    cat: "Operating Systems",
     q: "Which type of memory is volatile and loses its content when power is turned off?",
     opts: ["ROM", "RAM", "Hard Disk", "Flash Drive"],
     ans: 1
   },
   {
+    cat: "Databases",
     q: "Which of the following is an open-source relational database management system?",
     opts: ["PostgreSQL", "Photoshop", "Docker", "Windows 11"],
     ans: 0
   }
 ];
 
-// Tough edge-cases designed to stress test OCR, parser, nested math, and flexible UI wrapping
+// 2. Logical Reasoning: Direction Sense, Sitting Arrangements, Blood Relations & Logic
+const reasoningQuestions = [
+  {
+    cat: "Direction Sense Test (Distance & Bearing)",
+    q: "A delivery agent starts from depot A and drives 12 km North to point B. He takes a right turn and drives 9 km to point C. Then, he turns right and drives 20 km to point D. Finally, he turns right and drives 9 km to point E.\n\nWhat is the shortest distance from point E to his starting depot A, and in which direction is point E located relative to depot A?",
+    opts: [
+      "8 km, South (Point E is exactly 8 km due South of A)",
+      "8 km, North",
+      "15 km, South-East",
+      "12 km, South-West"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Direction & Clock Angles",
+    q: "A wall clock displays the time as 4:30.\nIf the minute hand points towards East, in which direction will the hour hand point at this exact moment?",
+    opts: [
+      "North-East (At 4:30 the hour hand is halfway between 4 and 5, which rotates to North-East)",
+      "South-East",
+      "North-West",
+      "South-West"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Linear Seating Arrangement (Row Facing North)",
+    q: "Six candidates — P, Q, R, S, T, and U — are seated in a single straight row facing North:\n1. S sits third to the left of U.\n2. P sits at the extreme left end.\n3. R sits between S and T.\n4. Q is to the immediate left of U.\n\nWhich of the following correctly describes the exact seating order from left to right?",
+    opts: [
+      "P - S - R - T - Q - U",
+      "P - R - S - T - Q - U",
+      "S - P - R - Q - T - U",
+      "P - T - R - S - Q - U"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Circular Seating Arrangement (Facing Center)",
+    q: "Five friends — A, B, C, D, and E — are sitting around a circular table facing towards the center:\n• A is sitting between B and E.\n• C is sitting to the immediate right of B.\n• D is sitting to the immediate left of E.\n\nWho is sitting between C and D?",
+    opts: [
+      "No one (C and D are adjacent immediate neighbors)",
+      "A is seated between them",
+      "B is seated between them",
+      "E is seated between them"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Circular Seating Arrangement (8 Persons Facing Inward)",
+    q: "Eight friends — A, B, C, D, E, F, G, and H — are seated around a circular conference table facing the center:\n• B sits second to the right of D.\n• D sits third to the right of F.\n• C sits third to the left of H, where H is not an immediate neighbor of B or D.\n• E sits to the immediate right of A, who sits second to the right of G.\n\nWho sits directly opposite to D across the table?",
+    opts: [
+      "G (G is sitting directly opposite to D)",
+      "E (E is sitting directly opposite to D)",
+      "A (A is sitting directly opposite to D)",
+      "C (C is sitting directly opposite to D)"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Multi-Turn Direction Sense",
+    q: "Kavita starts from her house and walks 8 km South. She turns left and walks 6 km to a grocery store. From the store, she walks 14 km North to a library, and finally turns left and walks 6 km to her college campus.\n\nWhat is the shortest distance between Kavita's house and her college, and in which direction is the college from her house?",
+    opts: [
+      "6 km, Directly North of her house",
+      "8 km, Directly South of her house",
+      "10 km, North-East of her house",
+      "14 km, North of her house"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Coded Blood Relations",
+    q: "Examine the following relationship codes:\n• 'P + Q' means P is the father of Q.\n• 'P - Q' means P is the sister of Q.\n• 'P * Q' means P is the brother of Q.\n• 'P / Q' means P is the mother of Q.\n\nIn the family expression: 'M / N + O - P * Q', how is M related to Q?",
+    opts: [
+      "Paternal Grandmother (Father's Mother)",
+      "Maternal Grandmother (Mother's Mother)",
+      "Paternal Aunt",
+      "Elder Sister"
+    ],
+    ans: 0
+  },
+  {
+    cat: "Syllogism (Deductive Logic)",
+    q: "Carefully analyze the given statements and conclusions:\n\nStatements:\n1. All routers are modems.\n2. Some modems are switches.\n3. All switches are firewalls.\n\nConclusions:\nI. Some firewalls are modems.\nII. Some firewalls are switches.\nIII. Some routers are switches.\n\nWhich of the conclusion(s) logically follow?",
+    opts: [
+      "Only Conclusion I and II follow",
+      "Only Conclusion II and III follow",
+      "All Conclusions I, II, and III follow",
+      "Only Conclusion I follows"
+    ],
+    ans: 0
+  }
+];
+
+// 3. Tough Edge-Cases designed to stress test OCR, parser, nested math, and flexible UI wrapping
 const breakQuestions = [
   {
+    cat: "Algorithms & Asymptotics",
     q: "Consider the following recursive algorithm for divide-and-conquer matrix multiplication:\nT(N) = 7 * T(N/2) + Theta(N^2)\nAccording to Master's Theorem, what is the asymptotic runtime complexity?",
     opts: [
       "Theta(N^2 log N)",
@@ -212,6 +322,7 @@ const breakQuestions = [
     ans: 1
   },
   {
+    cat: "Operating Systems Paging",
     q: "In an Operating System with demand paging, if a system has 4 page frames (initially empty) and the memory reference string is:\n7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1\nWhat is the total number of page faults incurred using the Least Recently Used (LRU) page replacement algorithm?",
     opts: [
       "12 Page Faults (LRU keeps most recently referenced frame active)",
@@ -222,6 +333,7 @@ const breakQuestions = [
     ans: 0
   },
   {
+    cat: "C++ Memory Management",
     q: "Which of the following statements regarding C++11 std::vector and memory allocation is FALSE?",
     opts: [
       "std::vector elements are guaranteed to be stored contiguously in memory.",
@@ -232,6 +344,7 @@ const breakQuestions = [
     ans: 2
   },
   {
+    cat: "Chemical Kinetics & Stoichiometry",
     q: "Balance the following redox equation in an acidic aqueous medium:\nMnO4^- + Fe^2+ + H^+ -> Mn^2+ + Fe^3+ + H2O\nWhat is the stoichiometric ratio of MnO4^- to Fe^2+ in the balanced reaction?",
     opts: [
       "1:5 (1 MnO4^- oxidizes 5 Fe^2+ with 8 H^+ producing 5 Fe^3+ + Mn^2+ + 4 H2O)",
@@ -242,6 +355,7 @@ const breakQuestions = [
     ans: 0
   },
   {
+    cat: "Quantum Physics",
     q: "Given Planck's constant h = 6.626 x 10^-34 J*s and speed of light c = 3.0 x 10^8 m/s, what is the energy of a single photon having a wavelength lambda = 500 nm (5.0 x 10^-7 m)?",
     opts: [
       "3.98 x 10^-19 Joules (approx 2.48 eV)",
@@ -252,6 +366,7 @@ const breakQuestions = [
     ans: 0
   },
   {
+    cat: "Database Normalization",
     q: "In relational database theory, if a relation R(A, B, C, D) has the Functional Dependencies F = { A -> B, B -> C, C -> D, D -> A }, which normal form does relation R strictly satisfy?",
     opts: [
       "BCNF (Boyce-Codd Normal Form) because every determinant is a candidate superkey",
@@ -262,6 +377,7 @@ const breakQuestions = [
     ans: 0
   },
   {
+    cat: "Python Closures & Scoping",
     q: "Consider the following Python snippet:\n\ndef make_funcs():\n    return [lambda x, i=i: x + i for i in range(4)]\n\nprint([f(10) for f in make_funcs()])\nWhat is the exact stdout output?",
     opts: [
       "[10, 11, 12, 13]",
@@ -272,6 +388,7 @@ const breakQuestions = [
     ans: 0
   },
   {
+    cat: "Computer Networks & Congestion",
     q: "In TCP network congestion control, what exact event triggers the sender to enter Fast Retransmit and Fast Recovery?",
     opts: [
       "Receipt of 3 duplicate ACKs (Triple Duplicate ACK) without waiting for RTO timeout",
@@ -287,14 +404,22 @@ let questions = standardQuestions;
 let currentQ = 0;
 
 function setMode(mode) {
-  if (mode === 'break') {
+  document.getElementById('btnNormalMode').className = 'mode-btn';
+  document.getElementById('btnReasoningMode').className = 'mode-btn';
+  document.getElementById('btnBreakMode').className = 'mode-btn';
+
+  if (mode === 'reasoning') {
+    questions = reasoningQuestions;
+    document.getElementById('btnReasoningMode').className = 'mode-btn active-mode';
+    document.getElementById('sectionTitle').textContent = 'Section 2: Logical Reasoning & Aptitude';
+  } else if (mode === 'break') {
     questions = breakQuestions;
     document.getElementById('btnBreakMode').className = 'mode-btn active-mode';
-    document.getElementById('btnNormalMode').className = 'mode-btn';
+    document.getElementById('sectionTitle').textContent = 'Section 3: Advanced Edge Cases (Break-Test)';
   } else {
     questions = standardQuestions;
     document.getElementById('btnNormalMode').className = 'mode-btn active-mode';
-    document.getElementById('btnBreakMode').className = 'mode-btn';
+    document.getElementById('sectionTitle').textContent = 'Section 1: General & Technical';
   }
   buildGrid();
   loadQ(0);
@@ -303,6 +428,7 @@ function setMode(mode) {
 function loadQ(idx) {
   currentQ = idx;
   const q = questions[idx];
+  document.getElementById('qCategory').textContent = q.cat || 'General';
   document.getElementById('qLabel').textContent = 'Question No: ' + (idx + 1);
   document.getElementById('qText').textContent = q.q;
   const ol = document.getElementById('optList');
