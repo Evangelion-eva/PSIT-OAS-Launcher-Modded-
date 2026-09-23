@@ -178,22 +178,79 @@ function Show-AIAnswer {
     if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
     if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
 
+    # Clean markdown and formatting
+    $cleanRaw = $Answer.Replace('**', '').Replace('*', '').Replace('`', '').Trim()
+    $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+
+    $displayText = ""
+
+    # Priority 1: Match standard 'X (Option Text)' anywhere in output
+    foreach ($line in $lines) {
+        if ($line -match '([A-D]\s*\([^\)]+\))') {
+            $displayText = "Ans: " + $matches[1].Trim()
+            break
+        }
+    }
+
+    # Priority 2: Match 'Ans: X - Option' or 'X. Option'
+    if (-not $displayText) {
+        foreach ($line in $lines) {
+            if ($line -match '^(?:(?:Ans(?:wer)?|Option)\s*[:\-]\s*)?([A-D]\s*[\)\.\:\-]\s*.+)$') {
+                $displayText = "Ans: " + $matches[1].Trim()
+                break
+            }
+        }
+    }
+
+    # Priority 3: Match any line starting with option letter
+    if (-not $displayText) {
+        foreach ($line in $lines) {
+            if ($line -match '^[A-D]') {
+                $displayText = "Ans: " + $line
+                break
+            }
+        }
+    }
+
+    # Priority 4: Flexible fallback - if no standard option letter found, preserve full answer without cropping!
+    if (-not $displayText) {
+        $filteredLines = @()
+        $skipPhrases = @('here is', 'the correct', 'based on', 'i think', 'sure', 'hello', 'question:')
+        foreach ($line in $lines) {
+            $lower = $line.ToLower()
+            $skip = $false
+            if ($lines.Count -gt 1) {
+                foreach ($sp in $skipPhrases) {
+                    if ($lower.StartsWith($sp)) { $skip = $true; break }
+                }
+            }
+            if (-not $skip) { $filteredLines += $line }
+        }
+        $fullText = ($filteredLines -join " ").Trim()
+        if (-not $fullText) { $fullText = $cleanRaw }
+        $displayText = if ($fullText -match '^(Ans\s*[:\-])') { $fullText } else { "Ans: $fullText" }
+    }
+
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
-    # Dynamic calculation for ANY resolution
-    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
+    # Normal regular text - clean, natural, not bold
+    $font = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Regular)
+
+    # Flexible container sizing with WordBreak - expands dynamically for long answers without cropping
+    $maxW = [Math]::Min(720, [int]($scr.Width * 0.65))
+    $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::LeftAndRightPadding
+    $size = [System.Windows.Forms.TextRenderer]::MeasureText($displayText, $font, (New-Object System.Drawing.Size($maxW, 0)), $flags)
+
+    $ansW = [Math]::Min($maxW, [int]($size.Width + 16))
+    $ansH = [int]($size.Height + 8)
+
+    # Dynamic positioning for any screen resolution
     $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
-
-    # Clean point-to-point text
-    $firstLine = ($Answer -split "`r?`n")[0].Trim()
-    $displayText = if ($firstLine -match '^(Ans\s*[:\-])') { $firstLine } else { "Ans: $firstLine" }
-
-    $font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
-    $size = [System.Windows.Forms.TextRenderer]::MeasureText($displayText, $font)
-
-    # Tight form size covering ONLY the actual text so options & questions are never blocked
-    $ansW = $size.Width + 12
-    $ansH = $size.Height + 4
+    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
+    # Prevent overflowing off screen bottom
+    if ($ansY + $ansH -gt ($scr.Height - 35)) {
+        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
+    }
 
     $af = New-Object System.Windows.Forms.Form
     $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
@@ -210,10 +267,10 @@ function Show-AIAnswer {
     $lbl.Text        = $displayText
     $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
     $lbl.Font        = $font
-    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(20, 20, 20)
+    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(25, 25, 25)
     $lbl.BackColor   = [System.Drawing.Color]::White
-    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
-    $lbl.Padding     = New-Object System.Windows.Forms.Padding(2, 0, 0, 0)
+    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::TopLeft
+    $lbl.Padding     = New-Object System.Windows.Forms.Padding(4, 2, 4, 2)
     $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
     $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
 
@@ -791,7 +848,7 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are a student taking a multiple-choice exam. Read the question and all options carefully. Reply with ONLY the answer letter followed by the matching option text in brackets. Format exactly like this example: 'C (Diamond)'. One line, nothing else."
+                            $prompt = "You are an automated multiple-choice exam solver. Carefully read the question and options provided. Determine the single correct option. Your entire output MUST strictly be ONLY the option letter and its exact text formatted as: X (Option Text). Example: 'B (RAM)' or 'C (Diamond)'. Do NOT include any explanations, markdown, quotes, prefixes, or conversational text. Output exactly this format on one line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
@@ -800,7 +857,7 @@ $script:ocrTimer.Add_Tick({
                                     $body = @{
                                         model       = $modelName
                                         messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                        max_tokens  = 80
+                                        max_tokens  = 250
                                         temperature = 0.1
                                     } | ConvertTo-Json -Depth 5
                                     $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
