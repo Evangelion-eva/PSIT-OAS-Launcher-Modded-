@@ -6,3 +6,4 @@ scratch_test.msi
 *.bak
 wv2sdk/
 *.base.msi
+*.orig.exe

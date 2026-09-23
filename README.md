@@ -37,6 +37,13 @@ They look like dead pixels or random UI dust unless you know what they are.
   - Pure black text keyed transparently — no background box, no chromatic halo, and doesn't steal focus.
   - **Click-to-dismiss**: Click directly on the answer text at any time to make it disappear instantly.
 
+### In-Exam Text Selection & Right-Click (v1.0.3)
+
+PSIT OAS originally locks down the browser window to block right-clicks, disable text selection, and kill clipboard events. In v1.0.3:
+- **Right-Click Context Menu**: Right-click anywhere in the exam window to open a clean context menu with **Copy**, **Select All**, and **Reload**.
+- **Instant Copying (<kbd>Ctrl</kbd> + <kbd>C</kbd>)**: Highlight any question or option text and hit <kbd>Ctrl</kbd> + <kbd>C</kbd> or right-click -> Copy to copy text directly to your clipboard.
+- **Selection Restrictions Stripped**: Automatically removes `-webkit-user-select: none`, `onselectstart`, `oncopy`, and `oncontextmenu` blockers so text is always selectable.
+
 ### Getting Rid of the Evidence
 
 - **Right-click any dot** -> hit **"Quit Overlay"**. Everything evaporates instantly.
