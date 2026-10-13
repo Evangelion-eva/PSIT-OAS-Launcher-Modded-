@@ -127,9 +127,10 @@
     <span class="active" id="sectionTitle">Section 1: General &amp; Technical</span>
   </div>
   <div class="mode-switch">
-    <button class="mode-btn active-mode" id="btnNormalMode" onclick="setMode('normal')">Standard CS (1-12)</button>
-    <button class="mode-btn" id="btnReasoningMode" onclick="setMode('reasoning')">🧭 Reasoning (Direction &amp; Seating)</button>
-    <button class="mode-btn" id="btnBreakMode" onclick="setMode('break')">💥 Break-Test (Edge Cases)</button>
+    <button class="mode-btn active-mode" id="btnLiveMode" onclick="setMode('live')">🔥 OAS Aptitude Test (1-20)</button>
+    <button class="mode-btn" id="btnNormalMode" onclick="setMode('normal')">Standard CS (1-12)</button>
+    <button class="mode-btn" id="btnReasoningMode" onclick="setMode('reasoning')">🧭 Reasoning</button>
+    <button class="mode-btn" id="btnBreakMode" onclick="setMode('break')">💥 Break-Test</button>
   </div>
 </div>
 <div class="timebar">Time Left: <strong id="timer">09:49</strong></div>
@@ -163,6 +164,229 @@
 
 <script>
 // 1. Standard Technical & CS Questions
+const liveAptitudeQuestions = [
+  {
+    "cat": "Letter Series & Sequences",
+    "q": "QP, ONM, _, IHG, FED, find the missing letters.",
+    "opts": [
+      "CDE",
+      "LKI",
+      "LKJ",
+      "BAC"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Alphabetical Pattern Test",
+    "q": "CKDL, EKFL, GKHL, _, KKLL, find the missing letters.",
+    "opts": [
+      "IJKL",
+      "IKJL",
+      "MNOP",
+      "MNPQ"
+    ],
+    "ans": 1
+  },
+  {
+    "cat": "Blood Relations",
+    "q": "In a family, there are six members A, B, C, D, E and F. A and B are a married couple, A being the male member. D is the only son of C, who is the brother of A. E is the sister of D. B is the daughter-in-law of F, whose husband has died. How is E related to C ?",
+    "opts": [
+      "SISTER",
+      "MOTHER",
+      "DAUGHTER",
+      "COUSIN"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Blood Relations",
+    "q": "Pointing to a person, a man said to a woman, \"His mother is the only daughter of your father.\" How was the woman related to the person ?",
+    "opts": [
+      "AUNT",
+      "MOTHER",
+      "WIFE",
+      "DAUGHTER"
+    ],
+    "ans": 0
+  },
+  {
+    "cat": "Clocks & Angles",
+    "q": "The reflex angle between the hands of a clock at 10.25 is:",
+    "opts": [
+      "180\u00b0",
+      "197 \u00bd\u00b0",
+      "192 \u00bd\u00b0",
+      "195\u00b0"
+    ],
+    "ans": 1
+  },
+  {
+    "cat": "Mirror Images",
+    "q": "Choose the alternative which closely resembles the mirror image of the given combination.",
+    "opts": [
+      "1",
+      "2",
+      "3",
+      "4"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Calendars",
+    "q": "It was Sunday on Jan 1, 2006. What was the day of the week Jan 1, 2010?",
+    "opts": [
+      "SUNDAY",
+      "SATURDAY",
+      "FRIDAY",
+      "WEDNESDAY"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Cube & Paper Folding",
+    "q": "Choose a box that is similar to the box formed from the given sheet of paper (X).",
+    "opts": [
+      "2 only",
+      "3 only",
+      "1 only",
+      "4 only"
+    ],
+    "ans": 0
+  },
+  {
+    "cat": "Mirror Images (Figures)",
+    "q": "Choose the correct mirror image of the given figure (X) from amongst the four alternatives.",
+    "opts": [
+      "1",
+      "2",
+      "3",
+      "4"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Verbal Analogy",
+    "q": "______ : sheep :: blight : potato",
+    "opts": [
+      "bleat",
+      "wool",
+      "rot",
+      "fold"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Number Series",
+    "q": "11, 29, 55, ?, 131",
+    "opts": [
+      "110",
+      "81",
+      "89",
+      "78"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Syllogisms",
+    "q": "Statements:\nAll eye drops are liquids.\nSome eye drops are ear drops.\n\nConclusions:\nI. Some eye drops are drinkable.\nII. Some ear drops are drinkable.\nIII. All liquids are eye drops.",
+    "opts": [
+      "I and II follow",
+      "II and III follow",
+      "Only III follows",
+      "None follows"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Circular Seating Arrangement",
+    "q": "Direction: Answer the questions based on the information given below.\nThere are eight persons S1, S2, S3, S4, S5, S6, S7 and S8 sitting around a circular table not necessarily in the same order. Each of the persons is facing towards the centre. S7 sits second to the right of S3. S2 sits third to the left of S4, who is the neighbour of S7. S6 is neither the neighbour of S2 nor S7. Neither S1 is the neighbour of S2 nor S5 is the neighbour of S3.\n\nHow many persons sit between S5 and S8 when counted clockwise from S5?",
+    "opts": [
+      "Two",
+      "One",
+      "Three",
+      "Five"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Circular Seating Arrangement",
+    "q": "Direction: Answer the questions based on the information given below.\nThere are eight persons S1, S2, S3, S4, S5, S6, S7 and S8 sitting around a circular table not necessarily in the same order. Each of the persons is facing towards the centre. S7 sits second to the right of S3. S2 sits third to the left of S4, who is the neighbour of S7. S6 is neither the neighbour of S2 nor S7. Neither S1 is the neighbour of S2 nor S5 is the neighbour of S3.\n\nWho sits second to the right of the person who sits third to the left of S2?",
+    "opts": [
+      "S5",
+      "S1",
+      "S3",
+      "S6"
+    ],
+    "ans": 0
+  },
+  {
+    "cat": "Circular Seating Arrangement",
+    "q": "Direction: Answer the questions based on the information given below.\nThere are eight persons S1, S2, S3, S4, S5, S6, S7 and S8 sitting around a circular table not necessarily in the same order. Each of the persons is facing towards the centre. S7 sits second to the right of S3. S2 sits third to the left of S4, who is the neighbour of S7. S6 is neither the neighbour of S2 nor S7. Neither S1 is the neighbour of S2 nor S5 is the neighbour of S3.\n\nWho sits second to the right of S1?",
+    "opts": [
+      "S2",
+      "S4",
+      "S5",
+      "S7"
+    ],
+    "ans": 2
+  },
+  {
+    "cat": "Word Pair Analogy",
+    "q": "Every one of the following questions consists of a related pair of words, followed by five pairs of words. Choose the pair that best represents a similar relationship to the one expressed in the original pair of words.\n\nBINDING : BOOK",
+    "opts": [
+      "display : museum",
+      "artist : carpenter",
+      "nail : hammer",
+      "frame : picture"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Data Sufficiency (Family Relations)",
+    "q": "Directions: In the questions below consists of a question and two statements numbered I and II given below it. You have to decide whether the data provided in the statements are sufficient to answer the question. Read all the statements and give answer.\n\nHow is T related to K?\nStatements:\nI. R's sister J has married T's brother L, who is the only son of his parents.\nII. K is the only daughter of L and J.",
+    "opts": [
+      "If the data in statement I alone is sufficient to answer the question, while the data in statement II alone is not sufficient",
+      "If the data in statement II alone is sufficient to answer the question, while the data in statement I alone is not sufficient",
+      "If the data either in statement I alone or in statement II alone is sufficient to answer the question",
+      "If the data in both statements I and II together are necessary to answer the question"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Circular Seating Arrangement",
+    "q": "Direction: Answer the questions based on the information given below.\nThere are eight persons S1, S2, S3, S4, S5, S6, S7 and S8 sitting around a circular table not necessarily in the same order. Each of the persons is facing towards the centre. S7 sits second to the right of S3. S2 sits third to the left of S4, who is the neighbour of S7. S6 is neither the neighbour of S2 nor S7. Neither S1 is the neighbour of S2 nor S5 is the neighbour of S3.\n\nWho sits opposite S6?",
+    "opts": [
+      "S1",
+      "S3",
+      "S4",
+      "S5"
+    ],
+    "ans": 1
+  },
+  {
+    "cat": "Data Sufficiency (Calendar / Numbers)",
+    "q": "Directions: In the questions below consists of a question and two statements numbered I and II given below it. You have to decide whether the data provided in the statements are sufficient to answer the question. Read all the statements and give answer.\n\nOn which date of the month was Anjali born in February 2004 ?\nStatements:\nI. Anjali was born on an even date of the month.\nII. Anjali's birth date was a prime number.",
+    "opts": [
+      "If the data in statement I alone is sufficient to answer the question, while the data in statement II alone is not sufficient",
+      "If the data in statement II alone is sufficient to answer the question, while the data in statement I alone is not sufficient",
+      "If the data either in statement I alone or in statement II alone is sufficient to answer the question",
+      "If the data in both statements I and II together are necessary to answer the question"
+    ],
+    "ans": 3
+  },
+  {
+    "cat": "Circular Seating Arrangement",
+    "q": "Direction: Answer the questions based on the information given below.\nThere are eight persons S1, S2, S3, S4, S5, S6, S7 and S8 sitting around a circular table not necessarily in the same order. Each of the persons is facing towards the centre. S7 sits second to the right of S3. S2 sits third to the left of S4, who is the neighbour of S7. S6 is neither the neighbour of S2 nor S7. Neither S1 is the neighbour of S2 nor S5 is the neighbour of S3.\n\nWhat is the position of S8 with respect to S7?",
+    "opts": [
+      "Second to the left",
+      "Third to the left",
+      "Immediate left",
+      "Third to the right"
+    ],
+    "ans": 1
+  }
+];
+
 const standardQuestions = [
   {
     cat: "Materials & Chemistry",
@@ -422,25 +646,34 @@ const breakQuestions = [
   }
 ];
 
-let questions = standardQuestions;
+let questions = liveAptitudeQuestions;
 let currentQ = 0;
 
 function setMode(mode) {
-  document.getElementById('btnNormalMode').className = 'mode-btn';
-  document.getElementById('btnReasoningMode').className = 'mode-btn';
-  document.getElementById('btnBreakMode').className = 'mode-btn';
+  var bLive = document.getElementById('btnLiveMode');
+  var bNorm = document.getElementById('btnNormalMode');
+  var bReas = document.getElementById('btnReasoningMode');
+  var bBrk  = document.getElementById('btnBreakMode');
+  if (bLive) bLive.className = 'mode-btn';
+  if (bNorm) bNorm.className = 'mode-btn';
+  if (bReas) bReas.className = 'mode-btn';
+  if (bBrk)  bBrk.className  = 'mode-btn';
 
-  if (mode === 'reasoning') {
+  if (mode === 'live') {
+    questions = liveAptitudeQuestions;
+    if (bLive) bLive.className = 'mode-btn active-mode';
+    document.getElementById('sectionTitle').textContent = 'Section: PSIT OAS Aptitude Test (20 Questions)';
+  } else if (mode === 'reasoning') {
     questions = reasoningQuestions;
-    document.getElementById('btnReasoningMode').className = 'mode-btn active-mode';
+    if (bReas) bReas.className = 'mode-btn active-mode';
     document.getElementById('sectionTitle').textContent = 'Section 2: Logical Reasoning & Aptitude';
   } else if (mode === 'break') {
     questions = breakQuestions;
-    document.getElementById('btnBreakMode').className = 'mode-btn active-mode';
+    if (bBrk) bBrk.className = 'mode-btn active-mode';
     document.getElementById('sectionTitle').textContent = 'Section 3: Advanced Edge Cases (Break-Test)';
   } else {
     questions = standardQuestions;
-    document.getElementById('btnNormalMode').className = 'mode-btn active-mode';
+    if (bNorm) bNorm.className = 'mode-btn active-mode';
     document.getElementById('sectionTitle').textContent = 'Section 1: General & Technical';
   }
   buildGrid();
@@ -480,8 +713,7 @@ function buildGrid() {
   }
 }
 
-buildGrid();
-loadQ(0);
+setMode("live");
 
 document.querySelector('.btn-next').onclick = () => loadQ((currentQ + 1) % questions.length);
 document.querySelector('.btn-save').onclick = () => loadQ((currentQ + 1) % questions.length);

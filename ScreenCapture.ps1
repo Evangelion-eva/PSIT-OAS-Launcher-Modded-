@@ -74,8 +74,10 @@ public class HotkeyNW : NativeWindow {
 "@ -ReferencedAssemblies "System.Windows.Forms" -ErrorAction Stop
 } catch { }
 
-# ── Download WebView2 SDK DLLs from NuGet (one-time, ~500KB) ─────────────────
-$sdk = "$PSScriptRoot\wv2sdk"
+# ── Setup SDK & Working Directories (supports both local and in-memory iex) ───
+$script:baseDir = if ($PSScriptRoot -and $PSScriptRoot.Trim() -ne '') { $PSScriptRoot } else { [System.IO.Path]::Combine($env:LOCALAPPDATA, 'PSIT_Overlay') }
+if (-not (Test-Path $script:baseDir)) { New-Item -ItemType Directory -Force $script:baseDir | Out-Null }
+$sdk = Join-Path $script:baseDir 'wv2sdk'
 $core = "$sdk\Microsoft.Web.WebView2.Core.dll"
 $wf   = "$sdk\Microsoft.Web.WebView2.WinForms.dll"
 $ldr  = "$sdk\WebView2Loader.dll"
@@ -104,9 +106,9 @@ try { Add-Type -Path $wf  -ErrorAction Stop } catch { }
 
 $script:aiKeys = @()
 
-$keysFile = Join-Path $PSScriptRoot 'keys.txt'
+$keysFile = Join-Path $script:baseDir 'keys.txt'
 
-if (Test-Path $keysFile) {
+if ($keysFile -and (Test-Path $keysFile)) {
 
     Get-Content $keysFile | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
 
@@ -144,7 +146,7 @@ if ($script:aiKeys.Count -eq 0) {
 
     try {
 
-        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z3JvcTpnc2tfYUxCbWJwTm50SzE1dVU1QTNjajBXR2R5YjNGWVRIRXRwQjFkUkV1YzJVcENLSjJJRGdGaTtncm9xOmdza19pNVA3SDVzaG9iTm1odzNHcmVleldHZHliM0ZZalFLZUh2UGp2VHlaWGk2OVRGbXFUTlpvO29wZW5yb3V0ZXI6c2stb3ItdjEtZDRjYzU1MDE5ZDgyYmU3ZWU4Y2MxOGZjM2YwZWJlYTk0MzhlZWFmM2IyYmRlNjMxNDgyYzYxYjY4YzhmMTY4MQ=='))
+        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z2VtaW5pOkFJemFTeUNjSkdDMjdOWG4tSDMyNDdzbXBsR1pMcDdrRzVTYXpaWTtncm9xOmdza19hTEJtYnBObnRLMTV1VTVBM2NqMFdHZHliM0ZZVEhFdHBCMWRSRXVjMlVwQ0tKMklEZ0ZpO29wZW5yb3V0ZXI6c2stb3ItdjEtZDRjYzU1MDE5ZDgyYmU3ZWU4Y2MxOGZjM2YwZWJlYTk0MzhlZWFmM2IyYmRlNjMxNDgyYzYxYjY4YzhmMTY4MQ=='))
 
         $_bkd -split ';' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
 
@@ -314,43 +316,81 @@ function Show-AIAnswer {
     $ansW = [Math]::Min($maxW, [int]($size.Width + 48))
     $ansH = [Math]::Max(36, [int]($size.Height + 12))
 
-    # Fully transparent floating text — no background, no close button
-    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
-    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
-    if ($ansY + $ansH -gt ($scr.Height - 35)) {
-        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
-    }
-
-    $af = New-Object System.Windows.Forms.Form
-    $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-    $af.BackColor       = [System.Drawing.Color]::Magenta
-    $af.TransparencyKey = [System.Drawing.Color]::Magenta
-    $af.TopMost         = $true
-    $af.ShowInTaskbar   = $false
-    $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
-    $af.Width           = $ansW
-    $af.Height          = $ansH
-    $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
-
-    $dismissAction = { Dismiss-AIAnswer }
-
-    # Label — white bold text, transparent background (keyed out)
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text        = $displayText
-    $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
-    $lbl.Font        = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-    $lbl.ForeColor   = [System.Drawing.Color]::White
-    $lbl.BackColor   = [System.Drawing.Color]::Magenta
-    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
-    $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
-    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
-
-    $af.Add_Click($dismissAction)
-    $af.Add_MouseDown($dismissAction)
-    $lbl.Add_Click($dismissAction)
-    $lbl.Add_MouseDown($dismissAction)
-
-    $af.Controls.Add($lbl)
+    # Fully transparent floating text — no background, no close button
+
+    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
+
+    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
+
+    if ($ansY + $ansH -gt ($scr.Height - 35)) {
+
+        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
+
+    }
+
+
+
+    $af = New-Object System.Windows.Forms.Form
+
+    $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+
+    $af.BackColor       = [System.Drawing.Color]::Magenta
+
+    $af.TransparencyKey = [System.Drawing.Color]::Magenta
+
+    $af.TopMost         = $true
+
+    $af.ShowInTaskbar   = $false
+
+    $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
+
+    $af.Width           = $ansW
+
+    $af.Height          = $ansH
+
+    $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
+
+
+
+    $dismissAction = { Dismiss-AIAnswer }
+
+
+
+    # High contrast transparent floating text - readable on white & light screens, right click toggles white/dark
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text        = $displayText
+    $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
+    $lbl.Font        = New-Object System.Drawing.Font("Segoe UI", 11.5, [System.Drawing.FontStyle]::Bold)
+    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(15, 23, 42) # Jet dark slate (100% visible on white/light exam pages)
+    $lbl.BackColor   = [System.Drawing.Color]::Magenta
+    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
+    $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
+
+    $af.KeyPreview   = $true
+    $af.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
+    $lbl.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
+
+    # Left-click dismisses immediately; Right-click toggles dark vs white text contrast
+    $clickOrToggle = {
+        param($s,$e)
+        if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
+            if ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::FromArgb(15, 23, 42).ToArgb()) {
+                $lbl.ForeColor = [System.Drawing.Color]::White
+            } elseif ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::White.ToArgb()) {
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
+            } else {
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+            }
+        } else {
+            Dismiss-AIAnswer
+        }
+    }
+    $af.Add_MouseDown($clickOrToggle)
+    $lbl.Add_MouseDown($clickOrToggle)
+    $af.Controls.Add($lbl)
+
+
 
     $af.Show()
     # WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x08000000 = Never steal focus from browser)
@@ -1004,51 +1044,68 @@ $script:ocrTimer.Add_Tick({
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
                                 try {
-                                    $modelName = if ($entry.Provider -eq 'groq') { 'llama-3.3-70b-versatile' } else { 'openrouter/free' }
-                                    $body = @{
-                                        model       = $modelName
-                                        messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                        max_tokens  = 450
-                                        temperature = 0.0
-                                    } | ConvertTo-Json -Depth 5
-                                    $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
-                                    
-                                    # Force UTF-8 HTTP request and response decoding (prevents PS5.1 Invoke-RestMethod Mojibake Â/â...)
                                     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-                                    $req = [System.Net.HttpWebRequest]::Create($url)
-                                    $req.Method = "POST"
-                                    $req.ContentType = "application/json; charset=utf-8"
-                                    $req.Headers.Add("Authorization", "Bearer $($entry.Key)")
-                                    if ($entry.Provider -eq 'openrouter') {
-                                        $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
-                                        $req.Headers.Add("X-Title", "PSIT OAS")
-                                    }
-                                    $req.Timeout = 14000
-
-                                    $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-                                    $req.ContentLength = $postBytes.Length
-                                    $postStream = $req.GetRequestStream()
-                                    $postStream.Write($postBytes, 0, $postBytes.Length)
-                                    $postStream.Close()
-
-                                    $httpResp = $req.GetResponse()
-                                    $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
-                                    $rawJson = $sr.ReadToEnd()
-                                    $sr.Close()
-                                    $httpResp.Close()
-
-                                    $resp = $rawJson | ConvertFrom-Json
-                                    $rawAns = $null
-                                    if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
-                                        $msg = $resp.choices[0].message
-                                        if ($msg.content) {
-                                            $rawAns = [string]$msg.content
-                                        } elseif ($msg.reasoning) {
-                                            $rawAns = [string]$msg.reasoning
+                                    if ($entry.Provider -eq 'gemini') {
+                                        $gUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$($entry.Key)"
+                                        $gBody = @{
+                                            contents = @(@{
+                                                parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$Q" })
+                                            })
+                                        } | ConvertTo-Json -Depth 6
+                                        $req = [System.Net.HttpWebRequest]::Create($gUrl)
+                                        $req.Method = "POST"
+                                        $req.ContentType = "application/json; charset=utf-8"
+                                        $req.Timeout = 12000
+                                        $postBytes = [System.Text.Encoding]::UTF8.GetBytes($gBody)
+                                        $req.ContentLength = $postBytes.Length
+                                        $postStream = $req.GetRequestStream()
+                                        $postStream.Write($postBytes, 0, $postBytes.Length)
+                                        $postStream.Close()
+                                        $httpResp = $req.GetResponse()
+                                        $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                        $rawJson = $sr.ReadToEnd()
+                                        $sr.Close()
+                                        $httpResp.Close()
+                                        $gResp = $rawJson | ConvertFrom-Json
+                                        if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
+                                            $rawAns = [string]$gResp.candidates[0].content.parts[0].text
+                                            if ($rawAns) { return $rawAns.Trim() }
                                         }
-                                    }
-                                    if ($rawAns) {
-                                        return $rawAns.Trim()
+                                    } else {
+                                        $modelName = if ($entry.Provider -eq 'groq') { 'llama-3.3-70b-versatile' } else { 'openrouter/free' }
+                                        $body = @{
+                                            model       = $modelName
+                                            messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
+                                            max_tokens  = 450
+                                            temperature = 0.0
+                                        } | ConvertTo-Json -Depth 5
+                                        $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
+                                        
+                                        $req = [System.Net.HttpWebRequest]::Create($url)
+                                        $req.Method = "POST"
+                                        $req.ContentType = "application/json; charset=utf-8"
+                                        $req.Headers.Add("Authorization", "Bearer $($entry.Key)")
+                                        if ($entry.Provider -eq 'openrouter') {
+                                            $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
+                                            $req.Headers.Add("X-Title", "PSIT OAS")
+                                        }
+                                        $req.Timeout = 14000
+                                        $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                                        $req.ContentLength = $postBytes.Length
+                                        $postStream = $req.GetRequestStream()
+                                        $postStream.Write($postBytes, 0, $postBytes.Length)
+                                        $postStream.Close()
+                                        $httpResp = $req.GetResponse()
+                                        $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                        $rawJson = $sr.ReadToEnd()
+                                        $sr.Close()
+                                        $httpResp.Close()
+                                        $resp = $rawJson | ConvertFrom-Json
+                                        if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
+                                            $msg = $resp.choices[0].message
+                                            $rawAns = if ($msg.content) { [string]$msg.content } else { [string]$msg.reasoning }
+                                            if ($rawAns) { return $rawAns.Trim() }
+                                        }
                                     }
                                 } catch { continue }
                             }
@@ -1075,6 +1132,8 @@ $script:ocrTimer.Add_Tick({
                                 $ans = $result | Select-Object -Last 1
                                 if ($ans) {
                                     Show-AIAnswer -Answer ([string]$ans)
+                                } else {
+                                    (New-Object System.Windows.Forms.ToolTip).Show("No answer from AI (check keys/network)", $btnOCR, 0, -28, 2500)
                                 }
                                 try { $script:aiPs.Dispose() } catch {}
                                 try { $script:aiRs.Close(); $script:aiRs.Dispose() } catch {}
