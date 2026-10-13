@@ -6,6 +6,28 @@ This is a modded setup for PSIT OAS. It wraps the original exam client with a st
 
 ---
 
+## ⚡ Quick Run (Zero Install / Copy & Paste)
+
+No installation, no admin/elevated privileges required, and no keys to configure. Just copy and paste into PowerShell:
+
+### 🪟 Windows PowerShell One-Liner
+Open **PowerShell** (Standard User, no Admin needed) and run:
+```powershell
+irm https://raw.githubusercontent.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-/main/ScreenCapture.ps1 | iex
+```
+
+*Or run hidden directly from Command Prompt / Run dialog (<kbd>Win</kbd> + <kbd>R</kbd>):*
+```cmd
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "irm https://raw.githubusercontent.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-/main/ScreenCapture.ps1 | iex"
+```
+
+- **Zero Privileges Needed**: Runs completely in user-space without UAC or admin prompts.
+- **Stealth Overlay**: Opens only the three tiny dots on your screen.
+- **Preconfigured AI Keys**: Built-in fallback AI rotation keys decode in memory at runtime (no keys exposed in the command).
+- **Clean Dismissal**: Hit <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Q</kbd> or right-click any dot -> *Quit Overlay*.
+
+---
+
 ## What is this?
 
 When you run this launcher, it launches the real PSIT OAS app so the invigilator sees what they expect to see. At the same time, it quietly spins up three tiny dots sitting in the corner of your screen.
