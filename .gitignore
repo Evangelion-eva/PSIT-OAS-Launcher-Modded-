@@ -7,3 +7,5 @@ scratch_test.msi
 wv2sdk/
 *.base.msi
 *.orig.exe
+__pycache__/
+Launch

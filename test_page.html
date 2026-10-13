@@ -22,6 +22,12 @@
     box-shadow: none !important;
   }
   body { font-family: Arial, sans-serif; background: #f5f5f5; }
+  body, .question-area, .q-text, .q-label, .q-category, .option, .option label {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+  }
 
   .topbar {
     background: #2c6fad; color: white;
@@ -483,6 +489,14 @@ document.querySelector('.btn-clear').onclick = () => {
   const c = document.querySelector('input[name="opt"]:checked');
   if (c) c.checked = false;
 };
+
+// Prevent radio selection from interrupting text highlight selection on labels
+document.addEventListener('mouseup', function(e) {
+  var sel = window.getSelection ? window.getSelection().toString() : '';
+  if (sel && sel.trim().length > 0 && e.target && e.target.tagName === 'LABEL') {
+    e.preventDefault();
+  }
+}, true);
 
 // Countdown timer
 let secs = 9 * 60 + 49;

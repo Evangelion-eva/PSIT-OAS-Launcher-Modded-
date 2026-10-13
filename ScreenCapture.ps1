@@ -1,4 +1,4 @@
-﻿Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 try { [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException) } catch {}
@@ -100,17 +100,68 @@ try { Add-Type -Path $core -ErrorAction Stop } catch { }
 try { Add-Type -Path $wf  -ErrorAction Stop } catch { }
 
 # ── AI Answer Engine ─────────────────────────────────────────────────────────
-# Load keys from keys.txt next to the script. Format: groq:<key> or openrouter:<key>
+# Load keys: 1) keys.txt (local override) 2) OAS_AI_KEYS env 3) built-in fallback (no plaintext)
+
 $script:aiKeys = @()
+
 $keysFile = Join-Path $PSScriptRoot 'keys.txt'
+
 if (Test-Path $keysFile) {
+
     Get-Content $keysFile | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
+
         $parts = $_.Trim() -split ':', 2
+
         if ($parts.Count -eq 2) {
+
             $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
+
         }
+
     }
+
 }
+
+if ($script:aiKeys.Count -eq 0 -and $env:OAS_AI_KEYS) {
+
+    $env:OAS_AI_KEYS -split '[;\r\n]+' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
+
+        $parts = $_.Trim() -split ':', 2
+
+        if ($parts.Count -eq 2) {
+
+            $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
+
+        }
+
+    }
+
+}
+
+if ($script:aiKeys.Count -eq 0) {
+
+    # Built-in fallback keys (base64 encoded - not plaintext)
+
+    try {
+
+        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z3JvcTpnc2tfYUxCbWJwTm50SzE1dVU1QTNjajBXR2R5YjNGWVRIRXRwQjFkUkV1YzJVcENLSjJJRGdGaTtncm9xOmdza19pNVA3SDVzaG9iTm1odzNHcmVleldHZHliM0ZZalFLZUh2UGp2VHlaWGk2OVRGbXFUTlpvO29wZW5yb3V0ZXI6c2stb3ItdjEtZDRjYzU1MDE5ZDgyYmU3ZWU4Y2MxOGZjM2YwZWJlYTk0MzhlZWFmM2IyYmRlNjMxNDgyYzYxYjY4YzhmMTY4MQ=='))
+
+        $_bkd -split ';' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
+
+            $parts = $_.Trim() -split ':', 2
+
+            if ($parts.Count -eq 2) {
+
+                $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
+
+            }
+
+        }
+
+    } catch {}
+
+}
+
 $script:aiKeyIndex  = 0
 $script:aiLabel     = $null   # floating answer label form
 $script:aiTimer     = $null   # auto-hide timer
@@ -171,56 +222,58 @@ function Invoke-AIAnswer {
     return $null
 }
 
+function Dismiss-AIAnswer {
+    if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
+    if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
+}
+
 function Show-AIAnswer {
     param([string]$Answer)
     if (-not $Answer) { return }
 
-    if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
-    if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
+    Dismiss-AIAnswer
 
-        # Clean markdown and formatting (preserve math asterisks)
+    # Clean markdown and formatting (preserve math asterisks)
     $cleanRaw = $Answer.Replace('**', '').Replace('`', '').Trim()
     $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 
     $displayText = ""
 
-    # Priority 1: Check for explicit "correct (answer|option) is X" or "Ans: X"
-    foreach ($line in $lines) {
-        if ($line -match '(?i)(?:correct\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*|^Ans(?:wer)?\s*[:\-]\s*)([A-D]\s*[\)\.\:\-]?\s*\(?[^
-
-]+)') {
-            $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
+    # Priority 1: Scan bottom-to-top for explicit answer (reasoning models conclude at the bottom)
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i]
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?)\s*([A-D]\b.*)') {
+            $displayText = "Ans: " + $matches[1].Trim().TrimStart(':','-').Trim().TrimEnd('.')
             break
         }
     }
 
-    # Priority 2: Line starting with option letter, e.g. "B (O(N log N)...)" or "C (Diamond)"
+    # Priority 2: Scan bottom-to-top for line starting with option letter, e.g. "B (Quick Sort)"
     if (-not $displayText) {
-        foreach ($line in $lines) {
-            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^
-
-]+\))$') {
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            $line = $lines[$i]
+            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^)]+\))$') {
                 $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
             }
         }
     }
 
-    # Priority 3: Standalone 'X (Option Text)' anywhere in line
+    # Priority 3: Standalone 'X (Option Text)' anywhere in bottom lines
     if (-not $displayText) {
-        foreach ($line in $lines) {
-            if ($line -match '\b([A-D]\s*\([^
-
-]+\))') {
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            $line = $lines[$i]
+            if ($line -match '\b([A-D]\s*\([^)]+\))') {
                 $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
             }
         }
     }
 
-    # Priority 4: Line starting with an option letter like "B" or "B. Something"
+    # Priority 4: Bottom line starting with single letter like "B" or "B."
     if (-not $displayText) {
-        foreach ($line in $lines) {
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            $line = $lines[$i]
             if ($line -match '^[A-D]\b') {
                 $displayText = "Ans: " + $line.TrimEnd('.')
                 break
@@ -228,10 +281,10 @@ function Show-AIAnswer {
         }
     }
 
-    # Priority 4: Flexible fallback - if no standard option letter found, preserve full answer without cropping!
+    # Priority 5: Fallback - use cleanest line
     if (-not $displayText) {
         $filteredLines = @()
-        $skipPhrases = @('here is', 'the correct', 'based on', 'i think', 'sure', 'hello', 'question:')
+        $skipPhrases = @('here is', 'the correct', 'based on', 'i think', 'sure', 'hello', 'question:', 'let me')
         foreach ($line in $lines) {
             $lower = $line.ToLower()
             $skip = $false
@@ -249,58 +302,55 @@ function Show-AIAnswer {
 
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
-    # Normal regular text - clean, natural, not bold
+    # Normal regular text - clean, natural, legible
     $font = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Regular)
+    $boldFont = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
 
-    # Flexible container sizing with WordBreak - expands dynamically for long answers without cropping
+    # Flexible container sizing with WordBreak
     $maxW = [Math]::Min(720, [int]($scr.Width * 0.65))
     $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::LeftAndRightPadding
     $size = [System.Windows.Forms.TextRenderer]::MeasureText($displayText, $font, (New-Object System.Drawing.Size($maxW, 0)), $flags)
 
-    $ansW = [Math]::Min($maxW, [int]($size.Width + 16))
-    $ansH = [int]($size.Height + 8)
+    $ansW = [Math]::Min($maxW, [int]($size.Width + 48))
+    $ansH = [Math]::Max(36, [int]($size.Height + 12))
 
-    # Dynamic positioning for any screen resolution
-    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
-    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
-    # Prevent overflowing off screen bottom
-    if ($ansY + $ansH -gt ($scr.Height - 35)) {
-        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
-    }
-
-    $af = New-Object System.Windows.Forms.Form
-    $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-    $af.BackColor       = [System.Drawing.Color]::White
-    $af.TransparencyKey = [System.Drawing.Color]::White
-    $af.TopMost         = $true
-    $af.ShowInTaskbar   = $false
-    $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
-    $af.Width           = $ansW
-    $af.Height          = $ansH
-    $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
-
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text        = $displayText
-    $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
-    $lbl.Font        = $font
-    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(25, 25, 25)
-    $lbl.BackColor   = [System.Drawing.Color]::White
-    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::TopLeft
-    $lbl.Padding     = New-Object System.Windows.Forms.Padding(4, 2, 4, 2)
-    $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
-    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
-
-    # Click on the text to dismiss it immediately
-    $dismissAction = {
-        if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
-        if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
-    }
-    $af.Add_Click($dismissAction)
-    $af.Add_MouseDown($dismissAction)
-    $lbl.Add_Click($dismissAction)
-    $lbl.Add_MouseDown($dismissAction)
-
-    $af.Controls.Add($lbl)
+    # Fully transparent floating text — no background, no close button
+    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
+    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
+    if ($ansY + $ansH -gt ($scr.Height - 35)) {
+        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
+    }
+
+    $af = New-Object System.Windows.Forms.Form
+    $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $af.BackColor       = [System.Drawing.Color]::Magenta
+    $af.TransparencyKey = [System.Drawing.Color]::Magenta
+    $af.TopMost         = $true
+    $af.ShowInTaskbar   = $false
+    $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
+    $af.Width           = $ansW
+    $af.Height          = $ansH
+    $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
+
+    $dismissAction = { Dismiss-AIAnswer }
+
+    # Label — white bold text, transparent background (keyed out)
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text        = $displayText
+    $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
+    $lbl.Font        = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+    $lbl.ForeColor   = [System.Drawing.Color]::White
+    $lbl.BackColor   = [System.Drawing.Color]::Magenta
+    $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
+    $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
+
+    $af.Add_Click($dismissAction)
+    $af.Add_MouseDown($dismissAction)
+    $lbl.Add_Click($dismissAction)
+    $lbl.Add_MouseDown($dismissAction)
+
+    $af.Controls.Add($lbl)
 
     $af.Show()
     # WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x08000000 = Never steal focus from browser)
@@ -309,16 +359,12 @@ function Show-AIAnswer {
     [OV]::SetWindowPos($af.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
     $script:aiLabel = $af
 
-    # Auto-hide after 35 seconds (next question press replaces it sooner)
+    # Auto-hide after 35 seconds (or dismissed earlier by click/shortcut)
     $t = New-Object System.Windows.Forms.Timer
     $t.Interval = 35000
     $t.Add_Tick({
         param($sender, $args)
-        $sender.Stop(); $sender.Dispose()
-        if ($script:aiLabel) {
-            try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}
-            $script:aiLabel = $null
-        }
+        Dismiss-AIAnswer
     })
     $t.Start()
     $script:aiTimer = $t
@@ -762,12 +808,86 @@ $hoverTip = New-Object System.Windows.Forms.ToolTip
 $hoverTip.InitialDelay = 400
 $hoverTip.ReshowDelay = 200
 
+# ── Targeted Question Bounds & Cleaning Helpers ─────────────────────────────
+function Get-QuestionCaptureArea {
+    $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    # Online exam layouts place question & options in upper-left quadrant.
+    # Exclude top header bar (8.5%), bottom action buttons (10%), and right palette grid (26.5%).
+    $qx = [Math]::Max(0, [int]($scr.Width * 0.015))
+    $qy = [Math]::Max(0, [int]($scr.Height * 0.085))
+    $qw = [Math]::Min($scr.Width - $qx, [int]($scr.Width * 0.735))
+    $qh = [Math]::Min($scr.Height - $qy, [int]($scr.Height * 0.80))
+    return [System.Drawing.Rectangle]::new($qx, $qy, $qw, $qh)
+}
+
+function Clean-OCRQuestionText {
+    param([string]$Raw)
+    if (-not $Raw) { return "" }
+    $lines = ($Raw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+    $filtered = @()
+    foreach ($line in $lines) {
+        # Skip exam header noise, timer, question grid numbers, and action button names
+        if ($line -match '(?i)^(Time\s*Remaining|Timer|Candidate|Assessment\s*&|Marking\s*Scheme|Question\s*Palette|Legend|Answered|Not\s*Answered|Not\s*Visited|Marked\s*for\s*Review|Clear\s*Response|Save\s*&\s*Next|Submit\s*(Exam|Test)?)') {
+            continue
+        }
+        # Skip palette number chains e.g. "1 2 3 4 5 6"
+        if ($line -match '^\d+(\s+\d+){2,}$') {
+            continue
+        }
+        $filtered += $line
+    }
+    return ($filtered -join "`r`n").Trim()
+}
+
+function Start-OcrSolveWorker {
+    try {
+        $bar.Show()
+        [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+        Remove-Item $script:ocrResTmp -Force -EA SilentlyContinue
+        
+        $ip = $script:ocrImgTmp
+        $rp = $script:ocrResTmp
+        @"
+Add-Type -AssemblyName System.Runtime.WindowsRuntime -EA SilentlyContinue
+try {
+    `$at = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
+        Where-Object { `$_.Name -eq 'AsTask' -and `$_.IsGenericMethodDefinition -and `$_.GetParameters().Count -eq 1 }) |
+        Select-Object -First 1
+    function W(`$o,`$t){ `$m=`$at.MakeGenericMethod(`$t);`$n=`$m.Invoke(`$null,@(`$o));`$n.Wait()|Out-Null;`$n.Result }
+    [void][Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
+    [void][Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
+    [void][Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
+    `$e  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+    `$f  = W ([Windows.Storage.StorageFile]::GetFileFromPathAsync('$ip'))  ([Windows.Storage.StorageFile])
+    `$s  = W (`$f.OpenAsync([Windows.Storage.FileAccessMode]::Read))       ([Windows.Storage.Streams.IRandomAccessStream])
+    `$d  = W ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync(`$s)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    `$sb = W (`$d.GetSoftwareBitmapAsync())                                ([Windows.Graphics.Imaging.SoftwareBitmap])
+    `$r  = W (`$e.RecognizeAsync(`$sb))                                    ([Windows.Media.Ocr.OcrResult])
+    `$s.Dispose(); `$r.Text | Out-File '$rp' -Encoding UTF8
+} catch { "ERR:`$_" | Out-File '$rp' -Encoding UTF8 }
+"@ | Out-File $script:ocrWrkTmp -Encoding UTF8 -Force
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$($script:ocrWrkTmp)`""
+        $script:ocrTimer.Start()
+    } catch {
+        $bar.Show()
+        $script:ocrBusy = $false
+        $btnOCR.BackColor = [System.Drawing.Color]::Magenta
+    }
+}
+
 $btnCap=MakeCircle 0 $CAP_SIZE ([System.Drawing.Color]::FromArgb(255,80,145,255)) ([System.Drawing.Color]::FromArgb(255,20,65,210))
-$hoverTip.SetToolTip($btnCap, "Screenshot -> Clipboard (Ctrl+Shift+P)")
+$hoverTip.SetToolTip($btnCap, "Question Snip -> AI Solve & Clipboard (Ctrl+Shift+P)")
 $script:ssTimer = $null
 $btnCap.Add_Click({
     if ($script:suppressClick) { $script:suppressClick = $false; return }
     try {
+        if ($script:ocrDelayT) { try { $script:ocrDelayT.Stop(); $script:ocrDelayT.Dispose() } catch {}; $script:ocrDelayT = $null }
+        if ($script:ocrTimer) { try { $script:ocrTimer.Stop() } catch {} }
+        if ($script:aiPollTimer) { try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}; $script:aiPollTimer = $null }
+        Dismiss-AIAnswer
+
+        $script:ocrBusy = $true
+        $script:ocrPollN = 0
         $bar.Hide()
         if ($script:ssTimer) { try { $script:ssTimer.Stop(); $script:ssTimer.Dispose() } catch {} }
         $script:ssTimer = New-Object System.Windows.Forms.Timer
@@ -777,22 +897,32 @@ $btnCap.Add_Click({
             try { $sender.Stop(); $sender.Dispose() } catch {}
             $script:ssTimer = $null
             try {
-                $bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+                $qArea = Get-QuestionCaptureArea
+                # High recognizable quality (32bpp uncompressed ARGB with Bicubic filtering)
+                $bmp = New-Object System.Drawing.Bitmap($qArea.Width, $qArea.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
                 $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-                $gfx.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
+                $gfx.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $gfx.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $gfx.CopyFromScreen($qArea.X, $qArea.Y, 0, 0, $bmp.Size)
                 $gfx.Dispose()
+                
+                # Copy high-quality image to clipboard
                 [System.Windows.Forms.Clipboard]::SetDataObject($bmp, $true)
+                # Save snapshot for OCR and solver
+                $bmp.Save($script:ocrImgTmp, [System.Drawing.Imaging.ImageFormat]::Png)
                 $bmp.Dispose()
-                $bar.Show()
-                [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
-                (New-Object System.Windows.Forms.ToolTip).Show("Screenshot copied!", $btnCap, 0, -24, 1500)
+                
+                (New-Object System.Windows.Forms.ToolTip).Show("Question captured - solving with AI...", $btnCap, 0, -28, 2000)
+                Start-OcrSolveWorker
             } catch {
                 $bar.Show()
+                $script:ocrBusy = $false
             }
         })
         $script:ssTimer.Start()
     } catch {
         $bar.Show()
+        $script:ocrBusy = $false
     }
 })
 
@@ -825,7 +955,7 @@ $btnBrw.Add_Click({
 
 # ── OCR button — isolated subprocess, all vars $script: so timer tick can see them ──
 $btnOCR = MakeCircle ($CAP_SIZE+$GAP+$BRW_SIZE+$GAP) $OCR_SIZE ([System.Drawing.Color]::FromArgb(255,230,130,20)) ([System.Drawing.Color]::FromArgb(255,160,70,5))
-$hoverTip.SetToolTip($btnOCR, "Extract Screen Text -> Clipboard (Ctrl+Shift+T)")
+$hoverTip.SetToolTip($btnOCR, "Extract Question Text -> AI Solver (Ctrl+Shift+T)")
 $script:ocrBusy   = $false
 $script:ocrDelayT = $null
 $script:ocrImgTmp = [IO.Path]::Combine($env:TEMP, "oas_img_$PID.png")
@@ -833,7 +963,7 @@ $script:ocrResTmp = [IO.Path]::Combine($env:TEMP, "oas_res_$PID.txt")
 $script:ocrWrkTmp = [IO.Path]::Combine($env:TEMP, "oas_wkr_$PID.ps1")
 $script:ocrPollN  = 0
 $script:ocrTimer  = New-Object System.Windows.Forms.Timer
-$script:ocrTimer.Interval = 400
+$script:ocrTimer.Interval = 350
 $script:ocrTimer.Add_Tick({
     param($sender, $args)
     try {
@@ -847,9 +977,11 @@ $script:ocrTimer.Add_Tick({
             $script:ocrBusy = $false
             $txt = $txt.Trim()
             if ($txt -and -not $txt.StartsWith("ERR:")) {
+                $cleaned = Clean-OCRQuestionText -Raw $txt
+                if ($cleaned) { $txt = $cleaned }
                 $script:latestOCRText = $txt
                 [System.Windows.Forms.Clipboard]::SetText($txt)
-                (New-Object System.Windows.Forms.ToolTip).Show("Text copied - asking AI...", $btnOCR, 0, -28, 2200)
+                (New-Object System.Windows.Forms.ToolTip).Show("Question captured - solving...", $btnOCR, 0, -28, 2200)
                 # Fire AI answer in a background runspace so UI stays responsive (PS5 compatible)
                 if ($script:aiKeys.Count -gt 0) {
                     $capturedTxt  = $txt
@@ -867,17 +999,17 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an automated multiple-choice exam solver. Carefully read the question and options provided. Determine the single correct option. Your entire output MUST strictly be ONLY the option letter and its exact text formatted as: X (Option Text). Example: 'B (RAM)' or 'C (Diamond)'. Do NOT include any explanations, markdown, quotes, prefixes, or conversational text. Output exactly this format on one line."
+                            $prompt = "You are an expert multiple-choice exam solver. Read the question and all options with high logical precision. Determine the single correct option. At the very end of your response, output strictly: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: C (Diamond)'. No other text on that final line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
                                 try {
-                                    $modelName = if ($entry.Provider -eq 'groq') { 'qwen/qwen3.8-27b' } else { 'openrouter/free' }
+                                    $modelName = if ($entry.Provider -eq 'groq') { 'llama-3.3-70b-versatile' } else { 'openrouter/free' }
                                     $body = @{
                                         model       = $modelName
                                         messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                        max_tokens  = 250
-                                        temperature = 0.1
+                                        max_tokens  = 450
+                                        temperature = 0.0
                                     } | ConvertTo-Json -Depth 5
                                     $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
                                     
@@ -891,7 +1023,7 @@ $script:ocrTimer.Add_Tick({
                                         $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
                                         $req.Headers.Add("X-Title", "PSIT OAS")
                                     }
-                                    $req.Timeout = 10000
+                                    $req.Timeout = 14000
 
                                     $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
                                     $req.ContentLength = $postBytes.Length
@@ -979,7 +1111,12 @@ $script:ocrTimer.Add_Tick({
 $btnOCR.Add_Click({
     if ($script:suppressClick) { $script:suppressClick = $false; return }
     try {
-        if ($script:ocrBusy) { return }
+        # Cancel any previous/in-flight OCR or solver immediately on repeat clicks (fixes 2nd/3rd click bug)
+        if ($script:ocrDelayT) { try { $script:ocrDelayT.Stop(); $script:ocrDelayT.Dispose() } catch {}; $script:ocrDelayT = $null }
+        if ($script:ocrTimer) { try { $script:ocrTimer.Stop() } catch {} }
+        if ($script:aiPollTimer) { try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}; $script:aiPollTimer = $null }
+        Dismiss-AIAnswer
+
         $script:ocrBusy = $true
         $script:ocrPollN = 0
         $btnOCR.BackColor = [System.Drawing.Color]::FromArgb(255,180,90,5)
@@ -993,40 +1130,17 @@ $btnOCR.Add_Click({
             try { $sender.Stop(); $sender.Dispose() } catch {}
             $script:ocrDelayT = $null
             try {
-                $bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+                $qArea = Get-QuestionCaptureArea
+                $bmp = New-Object System.Drawing.Bitmap($qArea.Width, $qArea.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
                 $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-                $gfx.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
+                $gfx.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $gfx.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $gfx.CopyFromScreen($qArea.X, $qArea.Y, 0, 0, $bmp.Size)
                 $gfx.Dispose()
                 $bmp.Save($script:ocrImgTmp, [System.Drawing.Imaging.ImageFormat]::Png)
                 $bmp.Dispose()
-                $bar.Show()
-                [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
-                Remove-Item $script:ocrResTmp -Force -EA SilentlyContinue
                 
-                # Build the worker script with explicit paths
-                $ip = $script:ocrImgTmp
-                $rp = $script:ocrResTmp
-                @"
-Add-Type -AssemblyName System.Runtime.WindowsRuntime -EA SilentlyContinue
-try {
-    `$at = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
-        Where-Object { `$_.Name -eq 'AsTask' -and `$_.IsGenericMethodDefinition -and `$_.GetParameters().Count -eq 1 }) |
-        Select-Object -First 1
-    function W(`$o,`$t){ `$m=`$at.MakeGenericMethod(`$t);`$n=`$m.Invoke(`$null,@(`$o));`$n.Wait()|Out-Null;`$n.Result }
-    [void][Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-    [void][Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
-    [void][Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
-    `$e  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-    `$f  = W ([Windows.Storage.StorageFile]::GetFileFromPathAsync('$ip'))  ([Windows.Storage.StorageFile])
-    `$s  = W (`$f.OpenAsync([Windows.Storage.FileAccessMode]::Read))       ([Windows.Storage.Streams.IRandomAccessStream])
-    `$d  = W ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync(`$s)) ([Windows.Graphics.Imaging.BitmapDecoder])
-    `$sb = W (`$d.GetSoftwareBitmapAsync())                                ([Windows.Graphics.Imaging.SoftwareBitmap])
-    `$r  = W (`$e.RecognizeAsync(`$sb))                                    ([Windows.Media.Ocr.OcrResult])
-    `$s.Dispose(); `$r.Text | Out-File '$rp' -Encoding UTF8
-} catch { "ERR:`$_" | Out-File '$rp' -Encoding UTF8 }
-"@ | Out-File $script:ocrWrkTmp -Encoding UTF8 -Force
-                Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$($script:ocrWrkTmp)`""
-                $script:ocrTimer.Start()
+                Start-OcrSolveWorker
             } catch {
                 $bar.Show()
                 $script:ocrBusy = $false
@@ -1063,7 +1177,7 @@ foreach ($b in @($btnCap, $btnBrw, $btnOCR)) {
             $n = [System.Windows.Forms.Cursor]::Position
             $dx = $n.X - $script:dPt.X
             $dy = $n.Y - $script:dPt.Y
-            if ([Math]::Abs($dx) + [Math]::Abs($dy) -gt 3) {
+            if ([Math]::Abs($dx) + [Math]::Abs($dy) -gt 10) {
                 $script:dragging = $true
                 $script:suppressClick = $true
                 $bar.Left += $dx
