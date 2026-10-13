@@ -24,6 +24,7 @@ public class OV {
     public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
 }
 "@
+try { [OV]::SetProcessDPIAware() | Out-Null } catch {}
 
 try {
 Add-Type @"
@@ -146,7 +147,7 @@ if ($script:aiKeys.Count -eq 0) {
 
     try {
 
-        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z2VtaW5pOkFJemFTeUNjSkdDMjdOWG4tSDMyNDdzbXBsR1pMcDdrRzVTYXpaWTtncm9xOmdza19hTEJtYnBObnRLMTV1VTVBM2NqMFdHZHliM0ZZVEhFdHBCMWRSRXVjMlVwQ0tKMklEZ0ZpO29wZW5yb3V0ZXI6c2stb3ItdjEtZDRjYzU1MDE5ZDgyYmU3ZWU4Y2MxOGZjM2YwZWJlYTk0MzhlZWFmM2IyYmRlNjMxNDgyYzYxYjY4YzhmMTY4MQ=='))
+        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z3JvcTpnc2tfYUxCbWJwTm50SzE1dVU1QTNjajBXR2R5YjNGWVRIRXRwQjFkUkV1YzJVcENLSjJJRGdGaTtncm9xOmdza19pNVA3SDVzaG9iTm1odzNHcmVleldHZHliM0ZZalFLZUh2UGp2VHlaWGk2OVRGbXFUTlpvO2dlbWluaTpBSXphU3lDY0pHQzI3TlhuLUgzMjQ3c21wbEdaTHA3a0c1U2F6Wlk7Z2VtaW5pOkFRLkFiOFJONkxaWUhnLXVaY1FDSDlWamZOLVJGRjgweDNacm1jZzBwVXczeEFfQzFiUm1BO2dlbWluaTpBUS5BYjhSTjZKVlo2Vk40MVF4UWh0OGc5TmhiQlI2dXpKQ3o0UkRYdTJIUFJRM1NZNFlwUQ=='))
 
         $_bkd -split ';' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
 
@@ -230,27 +231,31 @@ function Dismiss-AIAnswer {
 }
 
 function Show-AIAnswer {
-    param([string]$Answer)
+    param([string]$Answer, [string]$ModelTag = "")
     if (-not $Answer) { return }
 
     Dismiss-AIAnswer
 
-    # Clean markdown and formatting (preserve math asterisks)
+    # Clean markdown and formatting
     $cleanRaw = $Answer.Replace('**', '').Replace('`', '').Trim()
     $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 
     $displayText = ""
 
-    # Priority 1: Scan bottom-to-top for explicit answer (reasoning models conclude at the bottom)
+    # Priority 1: Explicit "Ans: X (Option Text)" or "final answer is: X"
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $line = $lines[$i]
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?)\s*([A-D]\b.*)') {
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?)\s*([A-D].*)') {
             $displayText = "Ans: " + $matches[1].Trim().TrimStart(':','-').Trim().TrimEnd('.')
+            break
+        }
+        if ($line -match '(?i)(?:boxed\{([A-D])\}|answer\s+is\s+\$?\boxed\{([^}]+)\}\$?)') {
+            $displayText = "Ans: " + ($matches[1] + $matches[2]).Trim()
             break
         }
     }
 
-    # Priority 2: Scan bottom-to-top for line starting with option letter, e.g. "B (Quick Sort)"
+    # Priority 2: Line starting with option letter, e.g. "B (Quick Sort)"
     if (-not $displayText) {
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             $line = $lines[$i]
@@ -265,7 +270,7 @@ function Show-AIAnswer {
     if (-not $displayText) {
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             $line = $lines[$i]
-            if ($line -match '\b([A-D]\s*\([^)]+\))') {
+            if ($line -match '([A-D]\s*\([^)]+\))') {
                 $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
                 break
             }
@@ -276,17 +281,17 @@ function Show-AIAnswer {
     if (-not $displayText) {
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             $line = $lines[$i]
-            if ($line -match '^[A-D]\b') {
+            if ($line -match '^[A-D]') {
                 $displayText = "Ans: " + $line.TrimEnd('.')
                 break
             }
         }
     }
 
-    # Priority 5: Fallback - use cleanest line
+    # Priority 5: Fallback - use cleanest conclusion line
     if (-not $displayText) {
         $filteredLines = @()
-        $skipPhrases = @('here is', 'the correct', 'based on', 'i think', 'sure', 'hello', 'question:', 'let me')
+        $skipPhrases = @('here is', 'based on', 'i think', 'sure', 'hello', 'question:', 'let me', 'to solve')
         foreach ($line in $lines) {
             $lower = $line.ToLower()
             $skip = $false
@@ -302,104 +307,82 @@ function Show-AIAnswer {
         $displayText = if ($fullText -match '^(Ans\s*[:\-])') { $fullText } else { "Ans: $fullText" }
     }
 
+    if ($ModelTag) {
+        $displayText = "$displayText  $ModelTag"
+    }
+
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $font = New-Object System.Drawing.Font('Segoe UI', 11.5, [System.Drawing.FontStyle]::Bold)
 
-    # Normal regular text - clean, natural, legible
-    $font = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Regular)
-    $boldFont = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
-
-    # Flexible container sizing with WordBreak
-    $maxW = [Math]::Min(720, [int]($scr.Width * 0.65))
+    $maxW = [Math]::Min(650, [int]($scr.Width * 0.50))
     $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::LeftAndRightPadding
     $size = [System.Windows.Forms.TextRenderer]::MeasureText($displayText, $font, (New-Object System.Drawing.Size($maxW, 0)), $flags)
 
-    $ansW = [Math]::Min($maxW, [int]($size.Width + 48))
-    $ansH = [Math]::Max(36, [int]($size.Height + 12))
+    $ansW = [Math]::Min($maxW, [int]($size.Width + 28))
+    $ansH = [Math]::Max(36, [int]($size.Height + 10))
 
-    # Fully transparent floating text — no background, no close button
+    # Place in top-right area (never overlaps the question on the left or options in center)
+    $ansX = [Math]::Max(20, [int]($scr.Width - $ansW - 24))
+    $ansY = 38
 
-    $ansX = [Math]::Max(36, [int]($scr.Width * 0.03))
-
-    $ansY = [Math]::Max(360, [int]($scr.Height * 0.57))
-
-    if ($ansY + $ansH -gt ($scr.Height - 35)) {
-
-        $ansY = [Math]::Max(50, [int]($scr.Height - $ansH - 45))
-
-    }
-
-
-
+    # Form with clean white transparency key (grayscale text anti-aliasing = ZERO magenta fringe!)
     $af = New-Object System.Windows.Forms.Form
-
     $af.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-
-    $af.BackColor       = [System.Drawing.Color]::Magenta
-
-    $af.TransparencyKey = [System.Drawing.Color]::Magenta
-
+    $af.BackColor       = [System.Drawing.Color]::White
+    $af.TransparencyKey = [System.Drawing.Color]::White
     $af.TopMost         = $true
-
     $af.ShowInTaskbar   = $false
-
     $af.StartPosition   = [System.Windows.Forms.FormStartPosition]::Manual
-
     $af.Width           = $ansW
-
     $af.Height          = $ansH
-
     $af.Location        = New-Object System.Drawing.Point($ansX, $ansY)
-
-
+    $af.KeyPreview      = $true
 
     $dismissAction = { Dismiss-AIAnswer }
 
-
-
-    # High contrast transparent floating text - readable on white & light screens, right click toggles white/dark
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.Text        = $displayText
     $lbl.Dock        = [System.Windows.Forms.DockStyle]::Fill
-    $lbl.Font        = New-Object System.Drawing.Font("Segoe UI", 11.5, [System.Drawing.FontStyle]::Bold)
-    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(15, 23, 42) # Jet dark slate (100% visible on white/light exam pages)
-    $lbl.BackColor   = [System.Drawing.Color]::Magenta
+    $lbl.Font        = $font
+    $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(15, 23, 42) # Jet dark slate (razor-sharp legibility, zero halo)
+    $lbl.BackColor   = [System.Drawing.Color]::White
     $lbl.TextAlign   = [System.Drawing.ContentAlignment]::MiddleLeft
     $lbl.BorderStyle = [System.Windows.Forms.BorderStyle]::None
-    $lbl.Cursor      = [System.Windows.Forms.Cursors]::Hand
+    $lbl.Cursor      = [System.Windows.Forms.Cursors]::SizeAll # Indicates draggable
 
-    $af.KeyPreview   = $true
-    $af.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
-    $lbl.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
-
-    # Left-click dismisses immediately; Right-click toggles dark vs white text contrast
-    $clickOrToggle = {
+    # Safe Drag to move answer anywhere on screen
+    $dragOrDismiss = {
         param($s,$e)
-        if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
+        if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+            [OV]::ReleaseCapture() | Out-Null
+            [OV]::SendMessage($af.Handle, [OV]::WM_NCLBUTTONDOWN, ([IntPtr][OV]::HTCAPTION), [IntPtr]::Zero) | Out-Null
+        } elseif ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
+            # Right-click toggles dark / white contrast
             if ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::FromArgb(15, 23, 42).ToArgb()) {
-                $lbl.ForeColor = [System.Drawing.Color]::White
-            } elseif ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::White.ToArgb()) {
-                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(25, 130, 255) # Royal Blue
+            } elseif ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::FromArgb(25, 130, 255).ToArgb()) {
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(0, 180, 80) # Emerald
             } else {
                 $lbl.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
             }
-        } else {
-            Dismiss-AIAnswer
         }
     }
-    $af.Add_MouseDown($clickOrToggle)
-    $lbl.Add_MouseDown($clickOrToggle)
+
+    $af.Add_MouseDown($dragOrDismiss)
+    $lbl.Add_MouseDown($dragOrDismiss)
+    $af.Add_DoubleClick($dismissAction)
+    $lbl.Add_DoubleClick($dismissAction)
+    $af.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
+
     $af.Controls.Add($lbl)
-
-
-
     $af.Show()
-    # WS_EX_TOOLWINDOW (0x80) + WS_EX_NOACTIVATE (0x08000000 = Never steal focus from browser)
+
     $ex = [OV]::GetWindowLong($af.Handle, [OV]::GWL_EXSTYLE)
     [OV]::SetWindowLong($af.Handle, [OV]::GWL_EXSTYLE, $ex -bor [OV]::WS_EX_TOOLWINDOW -bor 0x08000000) | Out-Null
     [OV]::SetWindowPos($af.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
     $script:aiLabel = $af
 
-    # Auto-hide after 35 seconds (or dismissed earlier by click/shortcut)
+    # Auto-hide after 35 seconds
     $t = New-Object System.Windows.Forms.Timer
     $t.Interval = 35000
     $t.Add_Tick({
@@ -851,12 +834,11 @@ $hoverTip.ReshowDelay = 200
 # ── Targeted Question Bounds & Cleaning Helpers ─────────────────────────────
 function Get-QuestionCaptureArea {
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    # Online exam layouts place question & options in upper-left quadrant.
-    # Exclude top header bar (8.5%), bottom action buttons (10%), and right palette grid (26.5%).
-    $qx = [Math]::Max(0, [int]($scr.Width * 0.015))
-    $qy = [Math]::Max(0, [int]($scr.Height * 0.085))
-    $qw = [Math]::Min($scr.Width - $qx, [int]($scr.Width * 0.735))
-    $qh = [Math]::Min($scr.Height - $qy, [int]($scr.Height * 0.80))
+    # Full question & options area: covers question text and all options A..D without clipping
+    $qx = 0
+    $qy = [Math]::Max(0, [int]($scr.Height * 0.05))
+    $qw = [Math]::Min($scr.Width, [int]($scr.Width * 0.85))
+    $qh = [Math]::Min($scr.Height - $qy, [int]($scr.Height * 0.90))
     return [System.Drawing.Rectangle]::new($qx, $qy, $qw, $qh)
 }
 
@@ -1039,10 +1021,11 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an expert multiple-choice exam solver. Read the question and all options with high logical precision. Determine the single correct option. At the very end of your response, output strictly: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: C (Diamond)'. No other text on that final line."
+                            $prompt = "You are an expert multiple-choice exam solver. Analyze the question and all options with high speed and precision. Determine the single correct option. At the very end of your response, output strictly on the final line: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: C (Diamond)'. Never omit the option letter."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
+                                $sw = [System.Diagnostics.Stopwatch]::StartNew()
                                 try {
                                     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
                                     if ($entry.Provider -eq 'gemini') {
@@ -1055,7 +1038,7 @@ $script:ocrTimer.Add_Tick({
                                         $req = [System.Net.HttpWebRequest]::Create($gUrl)
                                         $req.Method = "POST"
                                         $req.ContentType = "application/json; charset=utf-8"
-                                        $req.Timeout = 12000
+                                        $req.Timeout = 6000
                                         $postBytes = [System.Text.Encoding]::UTF8.GetBytes($gBody)
                                         $req.ContentLength = $postBytes.Length
                                         $postStream = $req.GetRequestStream()
@@ -1069,27 +1052,27 @@ $script:ocrTimer.Add_Tick({
                                         $gResp = $rawJson | ConvertFrom-Json
                                         if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
                                             $rawAns = [string]$gResp.candidates[0].content.parts[0].text
-                                            if ($rawAns) { return $rawAns.Trim() }
+                                            if ($rawAns) {
+                                                $sw.Stop()
+                                                $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                                                return @{ Ans = $rawAns.Trim(); Tag = "[Gemini • ${sec}s]" }
+                                            }
                                         }
-                                    } else {
-                                        $modelName = if ($entry.Provider -eq 'groq') { 'llama-3.3-70b-versatile' } else { 'openrouter/free' }
+                                    } elseif ($entry.Provider -eq 'groq') {
+                                        # Groq: ultra-fast 0.3s inference on qwen/qwen3.8-27b
                                         $body = @{
-                                            model       = $modelName
+                                            model       = 'qwen/qwen3.8-27b'
                                             messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                            max_tokens  = 450
+                                            max_tokens  = 350
                                             temperature = 0.0
                                         } | ConvertTo-Json -Depth 5
-                                        $url = if ($entry.Provider -eq 'groq') { 'https://api.groq.com/openai/v1/chat/completions' } else { 'https://openrouter.ai/api/v1/chat/completions' }
-                                        
+                                        $url = 'https://api.groq.com/openai/v1/chat/completions'
                                         $req = [System.Net.HttpWebRequest]::Create($url)
                                         $req.Method = "POST"
                                         $req.ContentType = "application/json; charset=utf-8"
                                         $req.Headers.Add("Authorization", "Bearer $($entry.Key)")
-                                        if ($entry.Provider -eq 'openrouter') {
-                                            $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
-                                            $req.Headers.Add("X-Title", "PSIT OAS")
-                                        }
-                                        $req.Timeout = 14000
+                                        $req.UserAgent = "Mozilla/5.0"
+                                        $req.Timeout = 5000
                                         $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
                                         $req.ContentLength = $postBytes.Length
                                         $postStream = $req.GetRequestStream()
@@ -1104,7 +1087,11 @@ $script:ocrTimer.Add_Tick({
                                         if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
                                             $msg = $resp.choices[0].message
                                             $rawAns = if ($msg.content) { [string]$msg.content } else { [string]$msg.reasoning }
-                                            if ($rawAns) { return $rawAns.Trim() }
+                                            if ($rawAns) {
+                                                $sw.Stop()
+                                                $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                                                return @{ Ans = $rawAns.Trim(); Tag = "[Groq • ${sec}s]" }
+                                            }
                                         }
                                     }
                                 } catch { continue }
@@ -1129,9 +1116,11 @@ $script:ocrTimer.Add_Tick({
                                 $snd.Stop(); $snd.Dispose()
                                 $script:aiPollTimer = $null
                                 $result = $script:aiPs.EndInvoke($script:aiHandle)
-                                $ans = $result | Select-Object -Last 1
-                                if ($ans) {
-                                    Show-AIAnswer -Answer ([string]$ans)
+                                $resObj = $result | Select-Object -Last 1
+                                if ($resObj) {
+                                    $ansText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Ans } else { [string]$resObj }
+                                    $tagText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Tag } else { "" }
+                                    Show-AIAnswer -Answer $ansText -ModelTag $tagText
                                 } else {
                                     (New-Object System.Windows.Forms.ToolTip).Show("No answer from AI (check keys/network)", $btnOCR, 0, -28, 2500)
                                 }
