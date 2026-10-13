@@ -288,23 +288,15 @@ function Show-AIAnswer {
         }
     }
 
-    # Priority 5: Fallback - use cleanest conclusion line
+    # Priority 5: Fallback - take ONLY the final line (NEVER combine lines into a paragraph!)
     if (-not $displayText) {
-        $filteredLines = @()
-        $skipPhrases = @('here is', 'based on', 'i think', 'sure', 'hello', 'question:', 'let me', 'to solve')
-        foreach ($line in $lines) {
-            $lower = $line.ToLower()
-            $skip = $false
-            if ($lines.Count -gt 1) {
-                foreach ($sp in $skipPhrases) {
-                    if ($lower.StartsWith($sp)) { $skip = $true; break }
-                }
-            }
-            if (-not $skip) { $filteredLines += $line }
-        }
-        $fullText = ($filteredLines -join " ").Trim()
-        if (-not $fullText) { $fullText = $cleanRaw }
-        $displayText = if ($fullText -match '^(Ans\s*[:\-])') { $fullText } else { "Ans: $fullText" }
+        $lastLine = if ($lines.Count -gt 0) { $lines[$lines.Count - 1] } else { $cleanRaw }
+        $displayText = if ($lastLine -match '^(Ans\s*[:\-])') { $lastLine } else { "Ans: $lastLine" }
+    }
+
+    # Hard cap text length to max 65 characters so it is ALWAYS a single clean line!
+    if ($displayText.Length -gt 65) {
+        $displayText = $displayText.Substring(0, 62).TrimEnd() + "..."
     }
 
     if ($ModelTag) {
@@ -931,7 +923,7 @@ function Start-GeminiVisionWorker {
             function Invoke-GeminiVision {
                 param([string]$B64)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $prompt = "You are an expert exam solver. Look at the question, diagram/figures, and all options in this screenshot with extreme precision. Determine the single correct option. At the very end of your response, output strictly on the final line: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: D (4)'. Never omit the option letter."
+                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the diagram and options. Output ONLY the single correct option letter and text strictly in this format: Ans: X (Option Text). Example: Ans: D (4). Your entire response must be just that single line."
                 
                 # Find working gemini key
                 $geminiKey = $null
@@ -1164,7 +1156,7 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an expert multiple-choice exam solver. Analyze the question and all options with high speed and precision. Determine the single correct option. At the very end of your response, output strictly on the final line: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: C (Diamond)'. Never omit the option letter."
+                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning or steps. Output ONLY the single correct option letter and option text strictly in this format: Ans: X (Option Text). Example: Ans: A (Only Conclusion I follows). Your entire response must be just that single line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
@@ -1206,7 +1198,7 @@ $script:ocrTimer.Add_Tick({
                                         $body = @{
                                             model       = 'qwen/qwen3.8-27b'
                                             messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                            max_tokens  = 350
+                                            max_tokens  = 45
                                             temperature = 0.0
                                         } | ConvertTo-Json -Depth 5
                                         $url = 'https://api.groq.com/openai/v1/chat/completions'
