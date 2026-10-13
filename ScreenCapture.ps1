@@ -147,7 +147,7 @@ if ($script:aiKeys.Count -eq 0) {
 
     try {
 
-        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z3JvcTpnc2tfYUxCbWJwTm50SzE1dVU1QTNjajBXR2R5YjNGWVRIRXRwQjFkUkV1YzJVcENLSjJJRGdGaTtncm9xOmdza19pNVA3SDVzaG9iTm1odzNHcmVleldHZHliM0ZZalFLZUh2UGp2VHlaWGk2OVRGbXFUTlpvO2dlbWluaTpBSXphU3lDY0pHQzI3TlhuLUgzMjQ3c21wbEdaTHA3a0c1U2F6Wlk7Z2VtaW5pOkFRLkFiOFJONkxaWUhnLXVaY1FDSDlWamZOLVJGRjgweDNacm1jZzBwVXczeEFfQzFiUm1BO2dlbWluaTpBUS5BYjhSTjZKVlo2Vk40MVF4UWh0OGc5TmhiQlI2dXpKQ3o0UkRYdTJIUFJRM1NZNFlwUQ=='))
+        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z2VtaW5pOkFRLkFiOFJONkpWWjZWTjQxUXhRaHQ4ZzlOaGJCUjZ1ekpDejRSRFh1MkhQUlEzU1k0WXBRO2dyb3E6Z3NrX2FMQm1icE5udEsxNXVVNUEzY2owV0dkeWIzRllUSEV0cEIxZFJFdWMyVXBDS0oySURnRmk7Z3JvcTpnc2tfaTVQN0g1c2hvYk5taHczR3JlZXpXR2R5YjNGWWpRS2VIdlBqdlR5WlhpNjlURm1xVE5abw=='))
 
         $_bkd -split ';' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
 
@@ -321,9 +321,9 @@ function Show-AIAnswer {
     $ansW = [Math]::Min($maxW, [int]($size.Width + 28))
     $ansH = [Math]::Max(36, [int]($size.Height + 10))
 
-    # Place in top-right area (never overlaps the question on the left or options in center)
-    $ansX = [Math]::Max(20, [int]($scr.Width - $ansW - 24))
-    $ansY = 38
+    # Position near options (below option D on left side of screen, without overlapping option text)
+    $ansX = [Math]::Max(36, [int]($scr.Width * 0.035))
+    $ansY = [Math]::Min([int]($scr.Height * 0.66), [int]($scr.Height - $ansH - 50))
 
     # Form with clean white transparency key (grayscale text anti-aliasing = ZERO magenta fringe!)
     $af = New-Object System.Windows.Forms.Form
@@ -368,10 +368,23 @@ function Show-AIAnswer {
         }
     }
 
-    $af.Add_MouseDown($dragOrDismiss)
-    $lbl.Add_MouseDown($dragOrDismiss)
-    $af.Add_DoubleClick($dismissAction)
-    $lbl.Add_DoubleClick($dismissAction)
+    # Single click anywhere on the text OR invisible box makes it disappear instantly!
+    $af.Add_Click($dismissAction)
+    $af.Add_MouseDown({ param($s,$e) if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Dismiss-AIAnswer } })
+    $lbl.Add_Click($dismissAction)
+    $lbl.Add_MouseDown({
+        param($s,$e)
+        if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+            Dismiss-AIAnswer
+        } elseif ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
+            # Right click toggles color contrast
+            if ($lbl.ForeColor.ToArgb() -eq [System.Drawing.Color]::FromArgb(15, 23, 42).ToArgb()) {
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(25, 130, 255) # Royal Blue
+            } else {
+                $lbl.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+            }
+        }
+    })
     $af.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Dismiss-AIAnswer } })
 
     $af.Controls.Add($lbl)
@@ -897,6 +910,130 @@ try {
     }
 }
 
+
+# ── Gemini Vision Solver (For Screenshots, Diagrams & Figures) ────────────────
+function Start-GeminiVisionWorker {
+    param([string]$ImageBase64)
+    try {
+        $bar.Show()
+        [OV]::SetWindowPos($bar.Handle, [OV]::HWND_TOPMOST, 0, 0, 0, 0, ([OV]::SWP_NOMOVE -bor [OV]::SWP_NOSIZE)) | Out-Null
+        
+        $capturedKeys = $script:aiKeys
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'
+        $rs.ThreadOptions  = 'ReuseThread'
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('imgB64',  $ImageBase64)
+        $rs.SessionStateProxy.SetVariable('aiKeys',  $capturedKeys)
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        $ps.AddScript({
+            function Invoke-GeminiVision {
+                param([string]$B64)
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $prompt = "You are an expert exam solver. Look at the question, diagram/figures, and all options in this screenshot with extreme precision. Determine the single correct option. At the very end of your response, output strictly on the final line: Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: D (4)'. Never omit the option letter."
+                
+                # Find working gemini key
+                $geminiKey = $null
+                foreach ($k in $aiKeys) {
+                    if ($k.Provider -eq 'gemini') { $geminiKey = $k.Key; break }
+                }
+                if (-not $geminiKey) { return $null }
+
+                try {
+                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                    $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$geminiKey"
+                    $body = @{
+                        contents = @(@{
+                            parts = @(
+                                @{
+                                    inline_data = @{
+                                        mime_type = "image/png"
+                                        data      = $B64
+                                    }
+                                },
+                                @{ text = $prompt }
+                            )
+                        })
+                    } | ConvertTo-Json -Depth 6
+
+                    $req = [System.Net.HttpWebRequest]::Create($url)
+                    $req.Method = "POST"
+                    $req.ContentType = "application/json; charset=utf-8"
+                    $req.Timeout = 12000
+                    $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                    $req.ContentLength = $postBytes.Length
+                    $postStream = $req.GetRequestStream()
+                    $postStream.Write($postBytes, 0, $postBytes.Length)
+                    $postStream.Close()
+
+                    $httpResp = $req.GetResponse()
+                    $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                    $rawJson = $sr.ReadToEnd()
+                    $sr.Close()
+                    $httpResp.Close()
+
+                    $gResp = $rawJson | ConvertFrom-Json
+                    if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
+                        $rawAns = [string]$gResp.candidates[0].content.parts[0].text
+                        if ($rawAns) {
+                            $sw.Stop()
+                            $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                            return @{ Ans = $rawAns.Trim(); Tag = "[Gemini Vision • ${sec}s]" }
+                        }
+                    }
+                } catch {}
+                return $null
+            }
+            Invoke-GeminiVision -B64 $imgB64
+        }) | Out-Null
+
+        $script:aiRs = $rs
+        $script:aiPs = $ps
+        $script:aiHandle = $ps.BeginInvoke()
+        if ($script:aiPollTimer) { try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}; $script:aiPollTimer = $null }
+        $script:aiPollTimer = New-Object System.Windows.Forms.Timer
+        $script:aiPollTimer.Interval = 70
+        $script:aiPollTimer.Add_Tick({
+            param($snd, $ev)
+            try {
+                if ($script:aiHandle -and $script:aiHandle.IsCompleted) {
+                    $snd.Stop(); $snd.Dispose()
+                    $script:aiPollTimer = $null
+                    $result = $script:aiPs.EndInvoke($script:aiHandle)
+                    $resObj = $result | Select-Object -Last 1
+                    if ($resObj) {
+                        $ansText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Ans } else { [string]$resObj }
+                        $tagText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Tag } else { "" }
+                        
+                        # Copy answer text to clipboard
+                        try { [System.Windows.Forms.Clipboard]::SetText($ansText) } catch {}
+                        Show-AIAnswer -Answer $ansText -ModelTag $tagText
+                    } else {
+                        # Fallback to OCR solve worker if Vision failed
+                        Start-OcrSolveWorker
+                    }
+                    try { $script:aiPs.Dispose() } catch {}
+                    try { $script:aiRs.Close(); $script:aiRs.Dispose() } catch {}
+                    $script:aiHandle = $null
+                    $script:aiPs     = $null
+                    $script:aiRs     = $null
+                    $script:ocrBusy  = $false
+                }
+            } catch {
+                try { $snd.Stop(); $snd.Dispose() } catch {}
+                $script:aiPollTimer = $null
+                $script:ocrBusy = $false
+            }
+        })
+        $script:aiPollTimer.Start()
+    } catch {
+        $bar.Show()
+        $script:ocrBusy = $false
+        Start-OcrSolveWorker
+    }
+}
+
 $btnCap=MakeCircle 0 $CAP_SIZE ([System.Drawing.Color]::FromArgb(255,80,145,255)) ([System.Drawing.Color]::FromArgb(255,20,65,210))
 $hoverTip.SetToolTip($btnCap, "Question Snip -> AI Solve & Clipboard (Ctrl+Shift+P)")
 $script:ssTimer = $null
@@ -930,12 +1067,18 @@ $btnCap.Add_Click({
                 
                 # Copy high-quality image to clipboard
                 [System.Windows.Forms.Clipboard]::SetDataObject($bmp, $true)
-                # Save snapshot for OCR and solver
+                # Save snapshot for OCR fallback
                 $bmp.Save($script:ocrImgTmp, [System.Drawing.Imaging.ImageFormat]::Png)
+
+                # Convert to base64 for direct Gemini Vision analysis (figures, diagrams & mirror images)
+                $ms = New-Object System.IO.MemoryStream
+                $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+                $b64Img = [Convert]::ToBase64String($ms.ToArray())
+                $ms.Dispose()
                 $bmp.Dispose()
                 
-                (New-Object System.Windows.Forms.ToolTip).Show("Question captured - solving with AI...", $btnCap, 0, -28, 2000)
-                Start-OcrSolveWorker
+                (New-Object System.Windows.Forms.ToolTip).Show("Screenshot -> Gemini Vision solving...", $btnCap, 0, -28, 2200)
+                Start-GeminiVisionWorker -ImageBase64 $b64Img
             } catch {
                 $bar.Show()
                 $script:ocrBusy = $false
@@ -1120,6 +1263,8 @@ $script:ocrTimer.Add_Tick({
                                 if ($resObj) {
                                     $ansText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Ans } else { [string]$resObj }
                                     $tagText = if ($resObj -is [System.Collections.IDictionary] -or $resObj -is [PSCustomObject]) { [string]$resObj.Tag } else { "" }
+                                    # Copy answer text to clipboard
+                                    try { [System.Windows.Forms.Clipboard]::SetText($ansText) } catch {}
                                     Show-AIAnswer -Answer $ansText -ModelTag $tagText
                                 } else {
                                     (New-Object System.Windows.Forms.ToolTip).Show("No answer from AI (check keys/network)", $btnOCR, 0, -28, 2500)
