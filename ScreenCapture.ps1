@@ -294,9 +294,23 @@ function Show-AIAnswer {
         $displayText = if ($lastLine -match '^(Ans\s*[:\-])') { $lastLine } else { "Ans: $lastLine" }
     }
 
-    # Hard cap text length to max 65 characters so it is ALWAYS a single clean line!
-    if ($displayText.Length -gt 65) {
-        $displayText = $displayText.Substring(0, 62).TrimEnd() + "..."
+    # If displayText is only a single letter like "Ans: A" or "Ans: B", automatically look up option text from question!
+    if ($displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])\s*$' -or $displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])[\.\:\-]?\s*$') {
+        $optLetter = $matches[1].ToUpper()
+        if ($script:latestOCRText) {
+            $optMatch = [regex]::Match($script:latestOCRText, "(?im)^\s*(?:\[?" + $optLetter + "\]?[\.\:\)\-]?)\s+([^
+]+)")
+            if ($optMatch.Success) {
+                $optContent = $optMatch.Groups[1].Value.Trim()
+                if ($optContent.Length -gt 55) { $optContent = $optContent.Substring(0, 52).TrimEnd() + "..." }
+                $displayText = "Ans: $optLetter. $optContent"
+            }
+        }
+    }
+
+    # Hard cap text length to max 75 characters so it is ALWAYS a single clean line!
+    if ($displayText.Length -gt 75) {
+        $displayText = $displayText.Substring(0, 72).TrimEnd() + "..."
     }
 
     if ($ModelTag) {
@@ -313,9 +327,9 @@ function Show-AIAnswer {
     $ansW = [Math]::Min($maxW, [int]($size.Width + 28))
     $ansH = [Math]::Max(36, [int]($size.Height + 10))
 
-    # Position near options (below option D on left side of screen, without overlapping option text)
+    # Position safely below Option D (left aligned with options, plenty of clearance)
     $ansX = [Math]::Max(36, [int]($scr.Width * 0.035))
-    $ansY = [Math]::Min([int]($scr.Height * 0.66), [int]($scr.Height - $ansH - 50))
+    $ansY = [Math]::Max(420, [int]($scr.Height * 0.70))
 
     # Form with clean white transparency key (grayscale text anti-aliasing = ZERO magenta fringe!)
     $af = New-Object System.Windows.Forms.Form
@@ -923,7 +937,7 @@ function Start-GeminiVisionWorker {
             function Invoke-GeminiVision {
                 param([string]$B64)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the diagram and options. Output ONLY the single correct option letter and text strictly in this format: Ans: X (Option Text). Example: Ans: D (4). Your entire response must be just that single line."
+                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the screenshot and options. Output the correct option letter AND the option text strictly in this format: Ans: X: Option Content. Example: Ans: A: Only Conclusion I and II follow. You must always include both the option letter AND the full option text. Never output just the letter alone. Your entire response must be just that single line."
                 
                 # Find working gemini key
                 $geminiKey = $null
@@ -1156,7 +1170,7 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning or steps. Output ONLY the single correct option letter and option text strictly in this format: Ans: X (Option Text). Example: Ans: A (Only Conclusion I follows). Your entire response must be just that single line."
+                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: X: Option Content. Example: Ans: A: Only Conclusion I and II follow. You must always include both the option letter AND the full option text. Never output just the letter alone. Your entire response must be just that single line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
