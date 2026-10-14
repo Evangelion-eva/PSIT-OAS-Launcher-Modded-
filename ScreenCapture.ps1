@@ -952,9 +952,13 @@ function Start-GeminiVisionWorker {
                 param([string]$B64)
                 # Full reasoning allowed - Ans: must be on LAST LINE
                 $prompt = "Look at this exam question image. Think through it carefully. On the LAST LINE output ONLY: Ans: [Letter] [[option text]]. Example: Ans: B [One]"
+                Write-Host "" 
+                Write-Host "=== IMAGE MODE AI SOLVE (Gemini Vision) ===" -ForegroundColor Yellow
                 foreach ($k in $aiKeys) {
                     if ($k.Provider -ne 'gemini') { continue }
                     $geminiKey = $k.Key
+                    $keyHint = $geminiKey.Substring(0, [Math]::Min(12,$geminiKey.Length)) + '...'
+                    Write-Host "[VISION] Calling gemini-2.5-flash-lite ($keyHint)" -ForegroundColor Magenta
                     try {
                         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
                         $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$geminiKey"
@@ -979,13 +983,23 @@ function Start-GeminiVisionWorker {
                         if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
                             $rawAns = [string]$gResp.candidates[0].content.parts[0].text
                             if ($rawAns) {
+                                $lastLine = (($rawAns -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                Write-Host "[VISION] Response ($($rawAns.Length) chars). Last line: $lastLine" -ForegroundColor Green
                                 $ex = ExtractAnsVis $rawAns
-                                if ($ex) { return @{ Ans = "Ans: $($ex.L) [$($ex.C)]"; Tag = "" } }
+                                if ($ex) {
+                                    Write-Host "[VISION] Extracted: $($ex.L) [$($ex.C)]" -ForegroundColor Cyan
+                                    return @{ Ans = "Ans: $($ex.L) [$($ex.C)]"; Tag = "" }
+                                }
+                                Write-Host "[VISION] Could not extract Ans: pattern - returning raw last line" -ForegroundColor DarkYellow
                                 return @{ Ans = $rawAns.Trim(); Tag = "" }
                             }
                         }
-                    } catch { continue }
+                    } catch {
+                        Write-Host "[VISION] ERROR: $_" -ForegroundColor Red
+                        continue
+                    }
                 }
+                Write-Host "[VISION] All gemini keys failed!" -ForegroundColor Red
                 return $null
             }
             Invoke-GeminiVision -B64 $imgB64
@@ -1238,6 +1252,8 @@ $script:ocrTimer.Add_Tick({
                         $prompt = "Solve this multiple-choice question. Think through it. On the LAST LINE output ONLY: Ans: [Letter] [[option text]]. Example: Ans: B [One]"
 
                         function CallGroq([string]$Key, [string]$Q, [string]$Prompt) {
+                            $keyHint = $Key.Substring(0, [Math]::Min(12,$Key.Length)) + '...'
+                            Write-Host "[GROQ] Calling qwen/qwen3.8-27b ($keyHint)" -ForegroundColor Cyan
                             try {
                                 $body = @{
                                     model = 'qwen/qwen3.8-27b'
@@ -1256,13 +1272,20 @@ $script:ocrTimer.Add_Tick({
                                 $r=$raw|ConvertFrom-Json
                                 if ($r -and $r.choices -and $r.choices.Count -gt 0) {
                                     $m=$r.choices[0].message
-                                    return if ($m.content) { [string]$m.content } else { [string]$m.reasoning }
+                                    $txt = if ($m.content) { [string]$m.content } else { [string]$m.reasoning }
+                                    $lastLine = (($txt -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                    Write-Host "[GROQ] Last line: $lastLine" -ForegroundColor Green
+                                    return $txt
                                 }
-                            } catch {}
+                            } catch {
+                                Write-Host "[GROQ] ERROR: $_" -ForegroundColor Red
+                            }
                             return $null
                         }
 
                         function CallGemini([string]$Key, [string]$Q, [string]$Prompt) {
+                            $keyHint = $Key.Substring(0, [Math]::Min(12,$Key.Length)) + '...'
+                            Write-Host "[GEMINI] Calling gemini-2.5-flash-lite ($keyHint)" -ForegroundColor Magenta
                             try {
                                 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
                                 $url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$Key"
@@ -1279,9 +1302,14 @@ $script:ocrTimer.Add_Tick({
                                 $raw=$sr.ReadToEnd(); $sr.Close(); $hr.Close()
                                 $r=$raw|ConvertFrom-Json
                                 if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
-                                    return [string]$r.candidates[0].content.parts[0].text
+                                    $txt = [string]$r.candidates[0].content.parts[0].text
+                                    $lastLine = (($txt -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                    Write-Host "[GEMINI] Last line: $lastLine" -ForegroundColor Green
+                                    return $txt
                                 }
-                            } catch {}
+                            } catch {
+                                Write-Host "[GEMINI] ERROR: $_" -ForegroundColor Red
+                            }
                             return $null
                         }
 
@@ -1299,33 +1327,51 @@ $script:ocrTimer.Add_Tick({
                         }
 
                         # Collect raw answers sequentially (outer RS is already background – no UI block)
+                        Write-Host "" 
+                        Write-Host "=== OCR TEXT MODE AI SOLVE ===" -ForegroundColor Yellow
+                        Write-Host "Question (first 120): $($capturedTxt.Substring(0,[Math]::Min(120,$capturedTxt.Length)))..." -ForegroundColor Gray
                         $rawAnswers = @()
+                        $keyN = 0
                         foreach ($entry in $aiKeys) {
+                            $keyN++
+                            Write-Host "[KEY $keyN] Provider=$($entry.Provider)" -ForegroundColor DarkCyan
                             $raw = $null
                             if ($entry.Provider -eq 'groq') {
                                 $raw = CallGroq -Key $entry.Key -Q $capturedTxt -Prompt $prompt
                             } elseif ($entry.Provider -eq 'gemini') {
                                 $raw = CallGemini -Key $entry.Key -Q $capturedTxt -Prompt $prompt
                             }
-                            if ($raw) { $rawAnswers += $raw }
+                            if ($raw) {
+                                $rawAnswers += $raw
+                                Write-Host "[KEY $keyN] Got response ($($raw.Length) chars)" -ForegroundColor DarkGreen
+                            } else {
+                                Write-Host "[KEY $keyN] No response / error" -ForegroundColor DarkRed
+                            }
                         }
 
                         # Majority vote across all answers
+                        Write-Host "[VOTE] Extracting answers from $($rawAnswers.Count) responses..." -ForegroundColor Yellow
                         $votes = @{}; $contents = @{}
                         foreach ($ra in $rawAnswers) {
                             $ex = ExtractAns $ra
                             if ($ex) {
+                                Write-Host "[VOTE] Extracted: $($ex.L) [$($ex.C)]" -ForegroundColor Cyan
                                 $ltr = $ex.L
                                 $votes[$ltr] = ([int]$votes[$ltr] + 1)
                                 if (-not $contents[$ltr] -or $ex.C) { $contents[$ltr] = $ex.C }
+                            } else {
+                                $lastL = (($ra -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                Write-Host "[VOTE] Could not extract from last line: $lastL" -ForegroundColor Red
                             }
                         }
 
                         if ($votes.Count -gt 0) {
                             $bestLetter = ($votes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1).Key
                             $bestContent = $contents[$bestLetter]
+                            Write-Host "[RESULT] Majority: $bestLetter [$bestContent]  votes=$($votes[$bestLetter])/$($rawAnswers.Count)" -ForegroundColor Green
                             return @{ Ans = "Ans: $bestLetter [$bestContent]"; Tag = "" }
                         }
+                        Write-Host "[RESULT] No answer extracted from any response!" -ForegroundColor Red
                         return $null
                     }) | Out-Null
                     $script:aiRs = $rs
