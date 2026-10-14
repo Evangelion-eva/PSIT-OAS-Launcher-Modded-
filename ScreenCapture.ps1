@@ -226,7 +226,15 @@ function Invoke-AIAnswer {
 
 function Dismiss-AIAnswer {
     if ($script:aiTimer) { try { $script:aiTimer.Stop(); $script:aiTimer.Dispose() } catch {}; $script:aiTimer = $null }
-    if ($script:aiLabel) { try { $script:aiLabel.Close(); $script:aiLabel.Dispose() } catch {}; $script:aiLabel = $null }
+    if ($script:aiLabel) {
+        try {
+            $script:aiLabel.Visible = $false
+            $script:aiLabel.Close()
+            $script:aiLabel.Dispose()
+        } catch {}
+        $script:aiLabel = $null
+    }
+    try { [System.Windows.Forms.Application]::DoEvents() } catch {}
 }
 
 function Show-AIAnswer {
@@ -237,74 +245,75 @@ function Show-AIAnswer {
 
     # Clean markdown and formatting
     $cleanRaw = $Answer.Replace('**', '').Replace("`"", '').Trim()
+    # Strip any Groq or Gemini model/time tag completely
+    $cleanRaw = [regex]::Replace($cleanRaw, '(?i)\[(Groq|Gemini)[^\]]*\]', '').Trim()
     $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 
-    $displayText = ""
+    $letter = ""
+    $content = ""
 
-    # Priority 1: Direct "Ans: X: text", "Ans: X - text", "Ans: X. text", or "The correct option is: X: text"
+    # Check for direct formats in answer lines
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $line = $lines[$i]
-        if ($line -match '(?i)(?:correct|final|answer|ans|\:|\s)*\b([A-D]\s*[:\.\-\)]\s*.+)$') {
-            $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
+        # Format 1: Ans: C [LKJ] or Ans: C (LKJ)
+        if ($line -match '(?i)(?:Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]([^\]\)]+)[\]\)]') {
+            $letter = $matches[1].ToUpper()
+            $content = $matches[2].Trim()
             break
         }
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?\s*$') {
-            $displayText = "Ans: " + $matches[1].ToUpper()
+        # Format 2: Ans: C: LKJ or Ans: C - LKJ or Ans: C. LKJ
+        if ($line -match '(?i)(?:Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*[:\.\-]\s*(.+)$') {
+            $letter = $matches[1].ToUpper()
+            $content = $matches[2].Trim()
             break
         }
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*\(([^)]+)\)') {
-            $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim()
+        # Format 3: Line starting with letter e.g. "C: LKJ" or "C [LKJ]" or "[C] LKJ"
+        if ($line -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])(.+?)[\]\)]?$') {
+            $letter = $matches[1].ToUpper()
+            $content = $matches[2].Trim()
+            break
+        }
+        # Format 4: Isolated letter e.g. "Ans: C" or "C"
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*)?\[?([A-D])\]?[\.\:\-]?$') {
+            $letter = $matches[1].ToUpper()
             break
         }
     }
 
-    # Priority 2: Line starting with option letter, e.g. "B: Quick Sort" or "[B] Quick Sort" or "B (Quick Sort)"
-    if (-not $displayText) {
-        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-            $line = $lines[$i]
-            if ($line -match '^\[?([A-D])\]?\s*[:\.\-\)]\s*(.+)$') {
-                $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim().TrimEnd('.')
-                break
-            }
-            if ($line -match '^\[?([A-D])\]?\s*\(([^)]+)\)$') {
-                $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim()
-                break
-            }
-            if ($line -match '^\[?([A-D])\]?\s*$') {
-                $displayText = "Ans: " + $matches[1].ToUpper()
-                break
-            }
+    # If we have a letter but no option text, look it up in current question OCR text
+    if ($letter -and -not $content -and $script:latestOCRText) {
+        $optP = "(?i)\b" + $letter + "\s*[\.\:\)\-]\s*([^\r\n]+)"
+        $optM = [regex]::Match($script:latestOCRText, $optP)
+        if ($optM.Success) {
+            $c = $optM.Groups[1].Value.Trim()
+            # Split off next option marker if options were on one line
+            $parts = [regex]::Split($c, '\s+[O0oQ]?\s*[A-D]\s*[\.\:\)\-]')
+            if ($parts.Count -gt 0) { $c = $parts[0].Trim() }
+            $c = [regex]::Replace($c, '(?i)\s*Ans\s*[:\-].*', '').Trim()
+            $content = $c
         }
     }
 
-    # Priority 3: Fallback - take ONLY the final line (never paragraphs!)
-    if (-not $displayText) {
+    # Construct clean answer: strictly Ans: [Letter] [[Content]] (e.g. Ans: A [CDE] or Ans: C [LKJ])
+    if ($letter -and $content) {
+        $displayText = "Ans: " + $letter + " [" + $content + "]"
+    } elseif ($letter) {
+        $displayText = "Ans: " + $letter
+    } else {
         $lastLine = if ($lines.Count -gt 0) { $lines[$lines.Count - 1] } else { $cleanRaw }
-        $displayText = if ($lastLine -match '(?i)^(Ans\s*[:\-])') { $lastLine } else { "Ans: $lastLine" }
+        $displayText = if ($lastLine -match '(?i)^(Ans\s*[:\-])') { $lastLine } else { "Ans: " + $lastLine }
     }
 
-    # If displayText is only a single letter like "Ans: A" or "Ans: B", look up option text from FRESH question OCR!
-    if ($displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])[\.\:\-]?\s*$') {
-        $optLetter = $matches[1].ToUpper()
-        if ($script:latestOCRText) {
-            $optPattern = "(?im)^\s*(?:\[?" + $optLetter + "\]?[\.\:\)\-]?)\s+([^\r\n]+)"
-            $optMatch = [regex]::Match($script:latestOCRText, $optPattern)
-            if ($optMatch.Success) {
-                $optContent = $optMatch.Groups[1].Value.Trim()
-                if ($optContent.Length -gt 55) { $optContent = $optContent.Substring(0, 52).TrimEnd() + "..." }
-                $displayText = "Ans: " + $optLetter + ": " + $optContent
-            }
+    # Hard cap text length to max 65 characters so it is ALWAYS a single clean line!
+    if ($displayText.Length -gt 65) {
+        if ($displayText.Contains("[")) {
+            $displayText = $displayText.Substring(0, 61).TrimEnd() + "...]"
+        } else {
+            $displayText = $displayText.Substring(0, 62).TrimEnd() + "..."
         }
     }
 
-    # Hard cap text length to max 75 characters so it is ALWAYS a single clean line!
-    if ($displayText.Length -gt 75) {
-        $displayText = $displayText.Substring(0, 72).TrimEnd() + "..."
-    }
-
-    if ($ModelTag) {
-        $displayText = "$displayText  $ModelTag"
-    }
+    # Note: Model/time tag (e.g. [Groq • 0.5s]) is INTENTIONALLY NOT DISPLAYED per user requirement!
 
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $font = New-Object System.Drawing.Font('Segoe UI', 11.5, [System.Drawing.FontStyle]::Bold)
@@ -864,6 +873,10 @@ function Clean-OCRQuestionText {
         if ($line -match '^\d+(\s+\d+){2,}$') {
             continue
         }
+        # Skip any existing on-screen AI answer or Groq/Gemini label
+        if ($line -match '(?i)^(Ans\s*[:\-]|(?:correct|final)\s+(?:option|answer)|\[?(Groq|Gemini))') {
+            continue
+        }
         $filtered += $line
     }
     return ($filtered -join "`r`n").Trim()
@@ -926,7 +939,7 @@ function Start-GeminiVisionWorker {
             function Invoke-GeminiVision {
                 param([string]$B64)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the screenshot and options. Output the correct option letter AND the option text strictly in this format: Ans: [Letter]: [Option Text]. Example format: Ans: C: London. Never default or bias toward A. Your entire response must be just that single line."
+                $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: [Letter] [[Option Text]]. Example: Ans: C [LKJ]. Never default or bias toward A. Your entire response must be just that single line."
                 
                 # Loop through all gemini keys until one succeeds
                 foreach ($k in $aiKeys) {
@@ -1158,7 +1171,7 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: [Letter]: [Option Text]. Example: Ans: C: London. Never default or bias toward A. Your entire response must be just that single line."
+                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: [Letter] [[Option Text]]. Example: Ans: C [LKJ]. Never default or bias toward A. Your entire response must be just that single line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
