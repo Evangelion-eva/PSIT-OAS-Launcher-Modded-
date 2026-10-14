@@ -1,7 +1,7 @@
 {
   "title": "PSIT OAS Launcher Engineering & Audit Tracker",
   "description": "Notion tracking database export for PSIT OAS Launcher (Modded)",
-  "last_synced": "2026-10-14T12:03:11Z",
+  "last_synced": "2026-10-14T12:21:38Z",
   "schema_properties": {
     "Task ID": {
       "type": "rich_text"
@@ -81,6 +81,24 @@
       "status": "Verified"
     },
     {
+      "id": "BUG-06",
+      "title": "Gemini Model Deprecation & 503 Spikes",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "Hardcoded `gemini-2.5-flash` model returned `404 Not Found` for new keys, and spikes in demand caused `503 Service Unavailable`.",
+      "solution": "Upgraded model sequence across PowerShell and Python solvers to prioritize `gemini-flash-lite-latest`, `gemini-flash-latest`, and `gemini-3.8-flash`.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-07",
+      "title": "Answer Card Formatting Noise",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "Extraneous model runtime tags (e.g. `[Groq \u2022 0.5s]`) cluttered exam answers and pushed HUD text onto multiple wrapped lines.",
+      "solution": "Enforced strict bottom-up regex formatting `Ans: [Letter] [Option Text]`, hardcapped width to 65 chars, and stripped all runtime telemetry tags.",
+      "status": "Verified"
+    },
+    {
       "id": "OPS-01",
       "title": "REA Setup (`morluto/rea`)",
       "category": "Ops",
@@ -114,6 +132,51 @@
       "priority": "P1",
       "root_cause": "Running scripts opened consoles or exposed plaintext API keys in CLI history.",
       "solution": "Built base64 in-memory key injection with completely hidden background window styles (`-WindowStyle Hidden` / `nohup`). Opens strictly the 3 dots.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-04",
+      "title": "Automated API Key Diagnostic Suite",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Users had no automated method to verify key health, quota limits, model availability, and response latencies before exams.",
+      "solution": "Created cross-platform CLI `test_keys.py` and `Test-Keys.ps1` with live verification, latency measurement, safe key masking, and JSON reporting.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-05",
+      "title": "Real Notion API Sync & Tracking Engine",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Manual task tracking in markdown did not synchronize with active Notion team databases.",
+      "solution": "Built `notion_tracker.py` leveraging official Notion API v1 (`/v1/pages`, `/v1/databases`) to push tasks, bugs, and API statuses directly into Notion.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-06",
+      "title": "Dual Text & Multimodal Vision Solver",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Questions with diagrams, charts, or complex formula layouts broke traditional OCR parsing.",
+      "solution": "Integrated inline Gemini Vision solver (`gemini-flash-lite-latest`) passing uncompressed base64 screenshots directly to multimodal AI.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-08",
+      "title": "Logic Questions Defaulting to 'A'",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "1) Literal newline inside `[^\\]\\)\\n]*` broke `ExtractAns`. 2) Parser lacked space delimiter matching (`Ans: D Text`), causing it to scan upward into question/options and falsely match `A. If data...`.",
+      "solution": "Built unified regex matching space/delimiter, bounded option scanning strictly to bottom 3 lines, upgraded reasoning prompt, and restored Groq `llama-3.3-70b-versatile` solver.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-07",
+      "title": "Benchmark Question Verification Suite",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "No automated regression test existed to verify reasoning accuracy across Syllogisms, Circular Seating, and Data Sufficiency.",
+      "solution": "Created `test_questions.py` benchmarking text and vision solving against tricky reasoning problems, verifying 100% accuracy.",
       "status": "Verified"
     }
   ]

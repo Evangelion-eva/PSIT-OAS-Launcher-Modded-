@@ -38,6 +38,8 @@
 | **FEAT-04** | **Automated API Key Diagnostic Suite** | Users had no automated method to verify key health, quota limits, model availability, and response latencies before exams. | Created cross-platform CLI `test_keys.py` and `Test-Keys.ps1` with live verification, latency measurement, safe key masking, and JSON reporting. | **Verified ✅** |
 | **FEAT-05** | **Real Notion API Sync & Tracking Engine** | Manual task tracking in markdown did not synchronize with active Notion team databases. | Built `notion_tracker.py` leveraging official Notion API v1 (`/v1/pages`, `/v1/databases`) to push tasks, bugs, and API statuses directly into Notion. | **Verified ✅** |
 | **FEAT-06** | **Dual Text & Multimodal Vision Solver** | Questions with diagrams, charts, or complex formula layouts broke traditional OCR parsing. | Integrated inline Gemini Vision solver (`gemini-flash-lite-latest`) passing uncompressed base64 screenshots directly to multimodal AI. | **Verified ✅** |
+| **BUG-08** | **Logic Questions Defaulting to 'A'** | 1) Literal newline inside `[^\]\)\n]*` broke `ExtractAns`.<br>2) Parser lacked space delimiter matching (`Ans: D Text`), causing it to scan upward into question/options and falsely match `A. If data...`. | Built unified regex matching space/delimiter, bounded option scanning strictly to bottom 3 lines, upgraded reasoning prompt, and restored Groq `llama-3.3-70b-versatile` solver. | **Verified ✅** |
+| **FEAT-07** | **Benchmark Question Verification Suite** | No automated regression test existed to verify reasoning accuracy across Syllogisms, Circular Seating, and Data Sufficiency. | Created `test_questions.py` benchmarking text and vision solving against tricky reasoning problems, verifying 100% accuracy. | **Verified ✅** |
 
 ---
 

@@ -141,38 +141,37 @@ def parse_ai_response(raw_text):
     clean = raw_text.replace("**", "").replace("`", "").strip()
     lines = [l.strip() for l in clean.splitlines() if l.strip()]
 
-    # Priority 1: Scan bottom-to-top for explicit answer
+    # Priority 1: Explicit answer marker
     for line in reversed(lines):
-        m = re.search(r"(?i)(?:^Ans(?:wer)?\s*[:\-]|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?)\s*([A-D]\b.*)", line)
+        m = re.search(
+            r'(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)'
+            r'\[?([A-D])\]?'
+            r'(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)'
+            r'([^\]\)\r\n]*)',
+            line
+        )
         if m:
-            return "Ans: " + m.group(1).strip().lstrip(":-").strip().rstrip(".")
+            letter = m.group(1).upper()
+            content = m.group(2).strip().rstrip(']').strip()
+            return f"Ans: {letter} [{content}]" if content else f"Ans: {letter}"
 
-    # Priority 2: Bottom-to-top line starting with option letter, e.g. "B (Quick Sort)"
-    for line in reversed(lines):
-        m = re.search(r"^([A-D]\s*[\)\.\:\-]\s*.+)$|^([A-D]\s*\([^)]+\))$", line)
-        if m:
-            return "Ans: " + (m.group(1) or m.group(2)).strip().rstrip(".")
+        m2 = re.search(
+            r'(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)'
+            r'\[?([A-D])\]?[\.\:\-]?$',
+            line
+        )
+        if m2:
+            return f"Ans: {m2.group(1).upper()}"
 
-    # Priority 3: Standalone 'X (Option Text)' anywhere in bottom lines
-    for line in reversed(lines):
-        m = re.search(r"\b([A-D]\s*\([^)]+\))", line)
-        if m:
-            return "Ans: " + m.group(1).strip().rstrip(".")
+    # Priority 2: Only bottom 3 lines starting with option letter (avoids matching question text)
+    start_idx = max(0, len(lines) - 3)
+    for line in reversed(lines[start_idx:]):
+        m3 = re.search(r'(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$', line)
+        if m3:
+            return f"Ans: {m3.group(1).upper()} [{m3.group(2).strip().rstrip(']').strip()}]"
 
-    # Priority 4: Bottom line starting with single letter like "B" or "B."
-    for line in reversed(lines):
-        if re.match(r"^[A-D]\b", line):
-            return "Ans: " + line.rstrip(".")
-
-    # Priority 5: Fallback cleanest line
-    filtered = []
-    skip_phrases = ("here is", "the correct", "based on", "i think", "sure", "hello", "question:", "let me")
-    for line in lines:
-        lower = line.lower()
-        if not any(lower.startswith(sp) for sp in skip_phrases):
-            filtered.append(line)
-    full = " ".join(filtered).strip() or clean
-    return full if full.startswith("Ans:") else f"Ans: {full}"
+    last_line = lines[-1] if lines else clean
+    return last_line if last_line.startswith("Ans:") else f"Ans: {last_line}"
 
 # ── AI Auto-Solver Execution ────────────────────────────────────────────────
 def query_ai_solver(question_text):
@@ -180,9 +179,10 @@ def query_ai_solver(question_text):
         return None
 
     prompt = (
-        "You are an expert multiple-choice exam solver. Read the question and all options with high logical precision. "
-        "Determine the single correct option. At the very end of your response, output strictly: "
-        "Ans: X (Exact Option Text). Example: 'Ans: B (Quick Sort)' or 'Ans: C (Diamond)'. No other text on that final line."
+        "You are an expert exam solver. Read the question and all options carefully. "
+        "Reason step-by-step to determine the single correct option. "
+        "On the VERY LAST LINE, output strictly in this exact format: "
+        "Ans: [Letter] [Option Text]. Example: Ans: B [Third to the left]"
     )
 
     for _ in range(len(ai_keys)):

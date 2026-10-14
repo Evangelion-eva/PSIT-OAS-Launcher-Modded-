@@ -179,34 +179,63 @@ function Invoke-AIAnswer {
     param([string]$QuestionText)
     if ($script:aiKeys.Count -eq 0) { return $null }
 
-    $prompt = "You are an expert exam solver. Solve this multiple-choice exam question. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
+    $prompt = "You are an expert exam solver. Read the question and all options carefully. Reason step-by-step to determine the single correct option. On the VERY LAST LINE, output strictly: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
     $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
     foreach ($entry in $script:aiKeys) {
-        if ($entry.Provider -ne 'gemini') { continue }
-        $geminiKey = $entry.Key
-        foreach ($m in $models) {
+        $prov = $entry.Provider
+        $key = $entry.Key
+
+        if ($prov -eq 'groq') {
             try {
                 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-                $url = "https://generativelanguage.googleapis.com/v1beta/models/$($m):generateContent?key=$geminiKey"
                 $body = @{
-                    contents = @(@{ parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$QuestionText" }) })
-                    generationConfig = @{ maxOutputTokens = 2048; temperature = 0.0 }
-                } | ConvertTo-Json -Depth 6
-                $req = [System.Net.HttpWebRequest]::Create($url)
-                $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"; $req.Timeout = 12000
+                    model = "llama-3.3-70b-versatile"
+                    messages = @(
+                        @{ role = "system"; content = $prompt },
+                        @{ role = "user"; content = "Question & Options:`n$QuestionText" }
+                    )
+                    max_tokens = 1500; temperature = 0.0
+                } | ConvertTo-Json -Depth 5
+                $req = [System.Net.HttpWebRequest]::Create("https://api.groq.com/openai/v1/chat/completions")
+                $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"
+                $req.Headers.Add("Authorization", "Bearer $key"); $req.Timeout = 12000
                 $b = [System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength = $b.Length
                 $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
                 $hr = $req.GetResponse()
                 $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
                 $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
                 $r = $raw | ConvertFrom-Json
-                if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
-                    $rawAns = [string]$r.candidates[0].content.parts[0].text
-                    if ($rawAns) { return $rawAns.Trim() }
+                if ($r -and $r.choices -and $r.choices.Count -gt 0) {
+                    $m = $r.choices[0].message
+                    $txt = if ($m.content) { [string]$m.content } else { [string]$m.reasoning }
+                    if ($txt) { return $txt.Trim() }
                 }
-            } catch {
-                continue
+            } catch { continue }
+        }
+
+        if ($prov -eq 'gemini') {
+            foreach ($m in $models) {
+                try {
+                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                    $url = "https://generativelanguage.googleapis.com/v1beta/models/$($m):generateContent?key=$key"
+                    $body = @{
+                        contents = @(@{ parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$QuestionText" }) })
+                        generationConfig = @{ maxOutputTokens = 2048; temperature = 0.0 }
+                    } | ConvertTo-Json -Depth 6
+                    $req = [System.Net.HttpWebRequest]::Create($url)
+                    $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"; $req.Timeout = 12000
+                    $b = [System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength = $b.Length
+                    $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
+                    $hr = $req.GetResponse()
+                    $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                    $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                    $r = $raw | ConvertFrom-Json
+                    if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
+                        $rawAns = [string]$r.candidates[0].content.parts[0].text
+                        if ($rawAns) { return $rawAns.Trim() }
+                    }
+                } catch { continue }
             }
         }
     }
@@ -244,27 +273,21 @@ function Show-AIAnswer {
     # Check for direct formats in answer lines
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $line = $lines[$i]
-        # Format 1: Ans: C [LKJ] or Ans: C (LKJ)
-        if ($line -match '(?i)(?:Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]([^\]\)]+)[\]\)]') {
+        # Format 1: Explicit answer marker with optional bracket/colon/dash or space (e.g. Ans: D If the data... or Ans: B [Third...])
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
             $letter = $matches[1].ToUpper()
-            $content = $matches[2].Trim()
+            $content = $matches[2].Trim().TrimEnd('].')
             break
         }
-        # Format 2: Ans: C: LKJ or Ans: C - LKJ or Ans: C. LKJ
-        if ($line -match '(?i)(?:Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*[:\.\-]\s*(.+)$') {
+        # Format 2: Isolated letter e.g. "Ans: D" or "Answer: B"
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?[\.\:\-]?$') {
             $letter = $matches[1].ToUpper()
-            $content = $matches[2].Trim()
             break
         }
-        # Format 3: Line starting with letter e.g. "C: LKJ" or "C [LKJ]" or "[C] LKJ"
-        if ($line -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])(.+?)[\]\)]?$') {
+        # Format 3: Line starting with letter e.g. "C: LKJ" or "C [LKJ]" (ONLY within last 3 lines to avoid matching question text)
+        if ($i -ge [Math]::Max(0, $lines.Count - 3) -and $line -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
             $letter = $matches[1].ToUpper()
-            $content = $matches[2].Trim()
-            break
-        }
-        # Format 4: Isolated letter e.g. "Ans: C" or "C"
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*)?\[?([A-D])\]?[\.\:\-]?$') {
-            $letter = $matches[1].ToUpper()
+            $content = $matches[2].Trim().TrimEnd('].')
             break
         }
     }
@@ -926,21 +949,30 @@ function Start-GeminiVisionWorker {
         $ps.Runspace = $rs
         $ps.AddScript({
             function ExtractAnsVis([string]$text) {
-                $ls = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                if (-not $text) { return $null }
+                $clean = $text.Replace('**', '').Replace("`"", '').Trim()
+                $ls = ($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
                 for ($i = $ls.Count - 1; $i -ge 0; $i--) {
                     $l = $ls[$i]
-                    if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|^ANSWER\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]?([^\]\)
-]*)') {
+                    if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
                         return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                     }
-                    if ($l -match '(?i)answer\s+is\s+\*{0,2}([A-D])\*{0,2}') { return @{ L=$matches[1].ToUpper(); C='' } }
-                    if ($l -match '\*\*([A-D])\*\*') { return @{ L=$matches[1].ToUpper(); C='' } }
+                    if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?[\.\:\-]?$') {
+                        return @{ L=$matches[1].ToUpper(); C='' }
+                    }
+                }
+                $startIdx = [Math]::Max(0, $ls.Count - 3)
+                for ($i = $ls.Count - 1; $i -ge $startIdx; $i--) {
+                    $l = $ls[$i]
+                    if ($l -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
+                        return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
+                    }
                 }
                 return $null
             }
             function Invoke-GeminiVision {
                 param([string]$B64)
-                $prompt = "You are an expert exam solver. Look at this exam question image. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
+                $prompt = "You are an expert exam solver. Look at this exam question image and read all options carefully. Reason step-by-step to determine the single correct option. On the VERY LAST LINE, output strictly: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
                 $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
                 Write-Host ""
@@ -1172,20 +1204,29 @@ $script:ocrTimer.Add_Tick({
                     $ps.Runspace = $rs
                     $ps.AddScript({
                         function ExtractAns([string]$text) {
-                            $ls = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                            if (-not $text) { return $null }
+                            $clean = $text.Replace('**', '').Replace("`"", '').Trim()
+                            $ls = ($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
                             for ($i = $ls.Count - 1; $i -ge 0; $i--) {
                                 $l = $ls[$i]
-                                if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|^ANSWER\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]?([^\]\)
-]*)') {
+                                if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
                                     return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                                 }
-                                if ($l -match '(?i)answer\s+is\s+\*{0,2}([A-D])\*{0,2}') { return @{ L=$matches[1].ToUpper(); C='' } }
-                                if ($l -match '\*\*([A-D])\*\*') { return @{ L=$matches[1].ToUpper(); C='' } }
+                                if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?[\.\:\-]?$') {
+                                    return @{ L=$matches[1].ToUpper(); C='' }
+                                }
+                            }
+                            $startIdx = [Math]::Max(0, $ls.Count - 3)
+                            for ($i = $ls.Count - 1; $i -ge $startIdx; $i--) {
+                                $l = $ls[$i]
+                                if ($l -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
+                                    return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
+                                }
                             }
                             return $null
                         }
 
-                        $prompt = "You are an expert exam solver. Solve this multiple-choice exam question. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
+                        $prompt = "You are an expert exam solver. Read the question and all options carefully. Reason step-by-step to determine the single correct option. On the VERY LAST LINE, output strictly: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
                         $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
                         Write-Host ""
@@ -1193,32 +1234,37 @@ $script:ocrTimer.Add_Tick({
                         Write-Host "Question (first 100): $($capturedTxt.Substring(0,[Math]::Min(100,$capturedTxt.Length)))..." -ForegroundColor Gray
 
                         foreach ($entry in $aiKeys) {
-                            if ($entry.Provider -ne 'gemini') { continue }
+                            $prov = $entry.Provider
                             $key = $entry.Key
                             $keyHint = $key.Substring(0, [Math]::Min(12, $key.Length)) + '...'
 
-                            foreach ($m in $models) {
-                                Write-Host "[TEXT SOLVE] Calling $m ($keyHint)..." -ForegroundColor Magenta
+                            if ($prov -eq 'groq') {
+                                Write-Host "[TEXT SOLVE] Calling Groq llama-3.3-70b-versatile ($keyHint)..." -ForegroundColor Cyan
                                 try {
                                     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-                                    $url = "https://generativelanguage.googleapis.com/v1beta/models/$($m):generateContent?key=$key"
                                     $body = @{
-                                        contents = @(@{ parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$capturedTxt" }) })
-                                        generationConfig = @{ maxOutputTokens = 2048; temperature = 0.0 }
-                                    } | ConvertTo-Json -Depth 6
-                                    $req = [System.Net.HttpWebRequest]::Create($url)
-                                    $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"; $req.Timeout = 12000
+                                        model = "llama-3.3-70b-versatile"
+                                        messages = @(
+                                            @{ role = "system"; content = $prompt },
+                                            @{ role = "user"; content = "Question & Options:`n$capturedTxt" }
+                                        )
+                                        max_tokens = 1500; temperature = 0.0
+                                    } | ConvertTo-Json -Depth 5
+                                    $req = [System.Net.HttpWebRequest]::Create("https://api.groq.com/openai/v1/chat/completions")
+                                    $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"
+                                    $req.Headers.Add("Authorization", "Bearer $key"); $req.Timeout = 12000
                                     $b = [System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength = $b.Length
                                     $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
                                     $hr = $req.GetResponse()
                                     $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
                                     $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
                                     $r = $raw | ConvertFrom-Json
-                                    if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
-                                        $txt = [string]$r.candidates[0].content.parts[0].text
+                                    if ($r -and $r.choices -and $r.choices.Count -gt 0) {
+                                        $msg = $r.choices[0].message
+                                        $txt = if ($msg.content) { [string]$msg.content } else { [string]$msg.reasoning }
                                         if ($txt) {
                                             $lastLine = (($txt -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
-                                            Write-Host "[TEXT SOLVE] Response: $lastLine" -ForegroundColor Green
+                                            Write-Host "[TEXT SOLVE] Groq Response: $lastLine" -ForegroundColor Green
                                             $ex = ExtractAns $txt
                                             if ($ex) {
                                                 Write-Host "[TEXT SOLVE] Extracted: $($ex.L) [$($ex.C)]" -ForegroundColor Cyan
@@ -1228,12 +1274,93 @@ $script:ocrTimer.Add_Tick({
                                         }
                                     }
                                 } catch {
-                                    Write-Host "[TEXT SOLVE] ($m) Error: $_" -ForegroundColor DarkYellow
+                                    Write-Host "[TEXT SOLVE] (Groq) Error: $_" -ForegroundColor DarkYellow
                                     continue
                                 }
                             }
+
+                            if ($prov -eq 'openrouter') {
+                                Write-Host "[TEXT SOLVE] Calling OpenRouter openrouter/free ($keyHint)..." -ForegroundColor Cyan
+                                try {
+                                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                                    $body = @{
+                                        model = "openrouter/free"
+                                        messages = @(
+                                            @{ role = "system"; content = $prompt },
+                                            @{ role = "user"; content = "Question & Options:`n$capturedTxt" }
+                                        )
+                                        max_tokens = 1500; temperature = 0.0
+                                    } | ConvertTo-Json -Depth 5
+                                    $req = [System.Net.HttpWebRequest]::Create("https://openrouter.ai/api/v1/chat/completions")
+                                    $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"
+                                    $req.Headers.Add("Authorization", "Bearer $key"); $req.Timeout = 14000
+                                    $req.Headers.Add("HTTP-Referer", "https://github.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-")
+                                    $req.Headers.Add("X-Title", "PSIT OAS")
+                                    $b = [System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength = $b.Length
+                                    $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
+                                    $hr = $req.GetResponse()
+                                    $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                    $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                    $r = $raw | ConvertFrom-Json
+                                    if ($r -and $r.choices -and $r.choices.Count -gt 0) {
+                                        $msg = $r.choices[0].message
+                                        $txt = if ($msg.content) { [string]$msg.content } else { [string]$msg.reasoning }
+                                        if ($txt) {
+                                            $lastLine = (($txt -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                            Write-Host "[TEXT SOLVE] OpenRouter Response: $lastLine" -ForegroundColor Green
+                                            $ex = ExtractAns $txt
+                                            if ($ex) {
+                                                Write-Host "[TEXT SOLVE] Extracted: $($ex.L) [$($ex.C)]" -ForegroundColor Cyan
+                                                return @{ Ans = "Ans: $($ex.L) [$($ex.C)]"; Tag = "" }
+                                            }
+                                            return @{ Ans = $txt.Trim(); Tag = "" }
+                                        }
+                                    }
+                                } catch {
+                                    Write-Host "[TEXT SOLVE] (OpenRouter) Error: $_" -ForegroundColor DarkYellow
+                                    continue
+                                }
+                            }
+
+                            if ($prov -eq 'gemini') {
+                                foreach ($m in $models) {
+                                    Write-Host "[TEXT SOLVE] Calling Gemini $m ($keyHint)..." -ForegroundColor Magenta
+                                    try {
+                                        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                                        $url = "https://generativelanguage.googleapis.com/v1beta/models/$($m):generateContent?key=$key"
+                                        $body = @{
+                                            contents = @(@{ parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$capturedTxt" }) })
+                                            generationConfig = @{ maxOutputTokens = 2048; temperature = 0.0 }
+                                        } | ConvertTo-Json -Depth 6
+                                        $req = [System.Net.HttpWebRequest]::Create($url)
+                                        $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"; $req.Timeout = 12000
+                                        $b = [System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength = $b.Length
+                                        $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
+                                        $hr = $req.GetResponse()
+                                        $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                        $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                        $r = $raw | ConvertFrom-Json
+                                        if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
+                                            $txt = [string]$r.candidates[0].content.parts[0].text
+                                            if ($txt) {
+                                                $lastLine = (($txt -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                                                Write-Host "[TEXT SOLVE] Response: $lastLine" -ForegroundColor Green
+                                                $ex = ExtractAns $txt
+                                                if ($ex) {
+                                                    Write-Host "[TEXT SOLVE] Extracted: $($ex.L) [$($ex.C)]" -ForegroundColor Cyan
+                                                    return @{ Ans = "Ans: $($ex.L) [$($ex.C)]"; Tag = "" }
+                                                }
+                                                return @{ Ans = $txt.Trim(); Tag = "" }
+                                            }
+                                        }
+                                    } catch {
+                                        Write-Host "[TEXT SOLVE] ($m) Error: $_" -ForegroundColor DarkYellow
+                                        continue
+                                    }
+                                }
+                            }
                         }
-                        Write-Host "[TEXT SOLVE] All Gemini keys/models failed!" -ForegroundColor Red
+                        Write-Host "[TEXT SOLVE] All keys/models failed!" -ForegroundColor Red
                         return $null
                     }) | Out-Null
                     $script:aiRs = $rs
