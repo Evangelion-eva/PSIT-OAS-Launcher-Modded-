@@ -8,6 +8,7 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class OV {
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll")] public static extern int  GetWindowLong(IntPtr h, int n);
     [DllImport("user32.dll")] public static extern int  SetWindowLong(IntPtr h, int n, int v);
@@ -265,30 +266,39 @@ function Show-AIAnswer {
     $cleanRaw = $Answer.Replace('**', '').Replace("`"", '').Trim()
     # Strip any Groq or Gemini model/time tag completely
     $cleanRaw = [regex]::Replace($cleanRaw, '(?i)\[(Groq|Gemini)[^\]]*\]', '').Trim()
-    $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+    # CRITICAL: Wrap in @(...) so single-line responses remain arrays and never get char-indexed
+    $lines = @(($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
 
     $letter = ""
     $content = ""
 
-    # Check for direct formats in answer lines
-    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-        $line = $lines[$i]
-        # Format 1: Explicit answer marker with optional bracket/colon/dash or space (e.g. Ans: D If the data... or Ans: B [Third...])
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
-            $letter = $matches[1].ToUpper()
-            $content = $matches[2].Trim().TrimEnd('].')
-            break
-        }
-        # Format 2: Isolated letter e.g. "Ans: D" or "Answer: B"
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?[\.\:\-]?$') {
-            $letter = $matches[1].ToUpper()
-            break
-        }
-        # Format 3: Line starting with letter e.g. "C: LKJ" or "C [LKJ]" (ONLY within last 3 lines to avoid matching question text)
-        if ($i -ge [Math]::Max(0, $lines.Count - 3) -and $line -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
-            $letter = $matches[1].ToUpper()
-            $content = $matches[2].Trim().TrimEnd('].')
-            break
+    # Direct check on cleanRaw if it starts with Ans: or Answer:
+    if ($cleanRaw -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
+        $letter = $matches[1].ToUpper()
+        $content = $matches[2].Trim().TrimEnd('].')
+    } elseif ($cleanRaw -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?[\.\:\-]?$') {
+        $letter = $matches[1].ToUpper()
+    } else {
+        # Check for direct formats in answer lines
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            $line = [string]$lines[$i]
+            # Format 1: Explicit answer marker with optional bracket/colon/dash or space (e.g. Ans: D If the data... or Ans: B [Third...])
+            if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
+                $letter = $matches[1].ToUpper()
+                $content = $matches[2].Trim().TrimEnd('].')
+                break
+            }
+            # Format 2: Isolated letter e.g. "Ans: D" or "Answer: B"
+            if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?[\.\:\-]?$') {
+                $letter = $matches[1].ToUpper()
+                break
+            }
+            # Format 3: Line starting with letter e.g. "C: LKJ" or "C [LKJ]" (ONLY within last 3 lines to avoid matching question text)
+            if ($i -ge [Math]::Max(0, $lines.Count - 3) -and $line -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
+                $letter = $matches[1].ToUpper()
+                $content = $matches[2].Trim().TrimEnd('].')
+                break
+            }
         }
     }
 
@@ -312,7 +322,7 @@ function Show-AIAnswer {
     } elseif ($letter) {
         $displayText = "Ans: " + $letter
     } else {
-        $lastLine = if ($lines.Count -gt 0) { $lines[$lines.Count - 1] } else { $cleanRaw }
+        $lastLine = if ($lines.Count -gt 0) { [string]$lines[$lines.Count - 1] } else { $cleanRaw }
         $displayText = if ($lastLine -match '(?i)^(Ans\s*[:\-])') { $lastLine } else { "Ans: " + $lastLine }
     }
 
@@ -324,6 +334,11 @@ function Show-AIAnswer {
             $displayText = $displayText.Substring(0, 62).TrimEnd() + "..."
         }
     }
+
+    try {
+        $dbg = "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`r`nDisplay: $displayText`r`nLetter: $letter`r`nContent: $content`r`nRawAnswer: $cleanRaw`r`n"
+        [System.IO.File]::WriteAllText("$env:TEMP\oas_debug_last_solve.txt", $dbg)
+    } catch {}
 
     # Note: Model/time tag (e.g. [Groq • 0.5s]) is INTENTIONALLY NOT DISPLAYED per user requirement!
 
@@ -863,18 +878,14 @@ $hoverTip.ReshowDelay = 200
 # ── Targeted Question Bounds & Cleaning Helpers ─────────────────────────────
 function Get-QuestionCaptureArea {
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    # Full question & options area: covers question text and all options A..D without clipping
-    $qx = 0
-    $qy = [Math]::Max(0, [int]($scr.Height * 0.05))
-    $qw = [Math]::Min($scr.Width, [int]($scr.Width * 0.85))
-    $qh = [Math]::Min($scr.Height - $qy, [int]($scr.Height * 0.90))
-    return [System.Drawing.Rectangle]::new($qx, $qy, $qw, $qh)
+    # Full screen capture guarantees NO options (A..D) or wide questions are ever clipped
+    return [System.Drawing.Rectangle]::new(0, 0, $scr.Width, $scr.Height)
 }
 
 function Clean-OCRQuestionText {
     param([string]$Raw)
     if (-not $Raw) { return "" }
-    $lines = ($Raw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+    $lines = @(($Raw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
     $filtered = @()
     foreach ($line in $lines) {
         # Skip exam header noise, timer, question grid numbers, and action button names
@@ -951,9 +962,15 @@ function Start-GeminiVisionWorker {
             function ExtractAnsVis([string]$text) {
                 if (-not $text) { return $null }
                 $clean = $text.Replace('**', '').Replace("`"", '').Trim()
-                $ls = ($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                if ($clean -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
+                    return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
+                }
+                if ($clean -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?[\.\:\-]?$') {
+                    return @{ L=$matches[1].ToUpper(); C='' }
+                }
+                $ls = @(($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
                 for ($i = $ls.Count - 1; $i -ge 0; $i--) {
-                    $l = $ls[$i]
+                    $l = [string]$ls[$i]
                     if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
                         return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                     }
@@ -963,7 +980,7 @@ function Start-GeminiVisionWorker {
                 }
                 $startIdx = [Math]::Max(0, $ls.Count - 3)
                 for ($i = $ls.Count - 1; $i -ge $startIdx; $i--) {
-                    $l = $ls[$i]
+                    $l = [string]$ls[$i]
                     if ($l -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
                         return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                     }
@@ -1206,9 +1223,15 @@ $script:ocrTimer.Add_Tick({
                         function ExtractAns([string]$text) {
                             if (-not $text) { return $null }
                             $clean = $text.Replace('**', '').Replace("`"", '').Trim()
-                            $ls = ($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                            if ($clean -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
+                                return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
+                            }
+                            if ($clean -match '(?i)^Ans(?:wer)?\s*[:\-]?\s*\[?([A-D])\]?[\.\:\-]?$') {
+                                return @{ L=$matches[1].ToUpper(); C='' }
+                            }
+                            $ls = @(($clean -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
                             for ($i = $ls.Count - 1; $i -ge 0; $i--) {
-                                $l = $ls[$i]
+                                $l = [string]$ls[$i]
                                 if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]?\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?(?:\s*[:\.\-]\s*|\s*[\[\(]|\s+)([^\]\)\r\n]*)') {
                                     return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                                 }
@@ -1218,7 +1241,7 @@ $script:ocrTimer.Add_Tick({
                             }
                             $startIdx = [Math]::Max(0, $ls.Count - 3)
                             for ($i = $ls.Count - 1; $i -ge $startIdx; $i--) {
-                                $l = $ls[$i]
+                                $l = [string]$ls[$i]
                                 if ($l -match '(?i)^\[?([A-D])\]?\s*(?:[:\.\-]\s*|[\[\(])\s*([^\]\)\r\n]+)[\]\)]?$') {
                                     return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd('].') }
                                 }
