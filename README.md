@@ -10,7 +10,13 @@ This is a modded setup for PSIT OAS. It wraps the original exam client with a st
 
 No installation, no admin/elevated privileges required, and no keys to configure. Just copy and paste into PowerShell:
 
-### 🪟 Windows PowerShell One-Liner
+### 🪟 Instant Local Run (Three Dots Only)
+If cloned / downloaded locally:
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\extracted\Launch-Dots.ps1
+```
+
+### 🌐 Direct Online One-Liner (No Clone Needed)
 Open **PowerShell** (Standard User, no Admin needed) and run:
 ```powershell
 irm https://raw.githubusercontent.com/Evangelion-eva/PSIT-OAS-Launcher-Modded-/main/ScreenCapture.ps1 | iex
