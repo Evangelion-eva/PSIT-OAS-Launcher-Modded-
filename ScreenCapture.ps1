@@ -107,22 +107,21 @@ try { Add-Type -Path $wf  -ErrorAction Stop } catch { }
 
 $script:aiKeys = @()
 
-$keysFile = Join-Path $script:baseDir 'keys.txt'
-
-if ($keysFile -and (Test-Path $keysFile)) {
-
-    Get-Content $keysFile | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
-
-        $parts = $_.Trim() -split ':', 2
-
-        if ($parts.Count -eq 2) {
-
-            $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
-
+$candidateKeys = @(
+    (Join-Path $script:baseDir 'keys.txt'),
+    'C:\extracted\keys.txt',
+    '.\keys.txt'
+)
+foreach ($kf in $candidateKeys) {
+    if ($kf -and (Test-Path $kf)) {
+        Get-Content $kf | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
+            $parts = $_.Trim() -split ':', 2
+            if ($parts.Count -eq 2) {
+                $script:aiKeys += [PSCustomObject]@{ Provider = $parts[0].Trim().ToLower(); Key = $parts[1].Trim() }
+            }
         }
-
+        if ($script:aiKeys.Count -gt 0) { break }
     }
-
 }
 
 if ($script:aiKeys.Count -eq 0 -and $env:OAS_AI_KEYS) {
@@ -147,7 +146,7 @@ if ($script:aiKeys.Count -eq 0) {
 
     try {
 
-        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z2VtaW5pOkFRLkFiOFJONkpWWjZWTjQxUXhRaHQ4ZzlOaGJCUjZ1ekpDejRSRFh1MkhQUlEzU1k0WXBRO2dyb3E6Z3NrX2FMQm1icE5udEsxNXVVNUEzY2owV0dkeWIzRllUSEV0cEIxZFJFdWMyVXBDS0oySURnRmk7Z3JvcTpnc2tfaTVQN0g1c2hvYk5taHczR3JlZXpXR2R5YjNGWWpRS2VIdlBqdlR5WlhpNjlURm1xVE5abw=='))
+        $_bkd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Z3JvcTpnc2tfYUxCbWJwTm50SzE1dVU1QTNjajBXR2R5YjNGWVRIRXRwQjFkUkV1YzJVcENLSjJJRGdGaTtncm9xOmdza19pNVA3SDVzaG9iTm1odzNHcmVleldHZHliM0ZZalFLZUh2UGp2VHlaWGk2OVRGbXFUTlpvO2dlbWluaTpBUS5BYjhSTjZKVlo2Vk40MVF4UWh0OGc5TmhiQlI2dXpKQ3o0UkRYdTJIUFJRM1NZNFlwUQ=='))
 
         $_bkd -split ';' | Where-Object { $_.Trim() -ne '' } | ForEach-Object {
 
@@ -237,73 +236,63 @@ function Show-AIAnswer {
     Dismiss-AIAnswer
 
     # Clean markdown and formatting
-    $cleanRaw = $Answer.Replace('**', '').Replace('`', '').Trim()
+    $cleanRaw = $Answer.Replace('**', '').Replace("`"", '').Trim()
     $lines = ($cleanRaw -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 
     $displayText = ""
 
-    # Priority 1: Explicit "Ans: X (Option Text)" or "final answer is: X"
+    # Priority 1: Direct "Ans: X: text", "Ans: X - text", "Ans: X. text", or "The correct option is: X: text"
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $line = $lines[$i]
-        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?)\s*([A-D].*)') {
-            $displayText = "Ans: " + $matches[1].Trim().TrimStart(':','-').Trim().TrimEnd('.')
+        if ($line -match '(?i)(?:correct|final|answer|ans|\:|\s)*\b([A-D]\s*[:\.\-\)]\s*.+)$') {
+            $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
             break
         }
-        if ($line -match '(?i)(?:boxed\{([A-D])\}|answer\s+is\s+\$?\boxed\{([^}]+)\}\$?)') {
-            $displayText = "Ans: " + ($matches[1] + $matches[2]).Trim()
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|(?:correct|final)\s+(?:option|answer|choice)\s+(?:is\s*)?[:\-]?\s*)\[?([A-D])\]?\s*$') {
+            $displayText = "Ans: " + $matches[1].ToUpper()
+            break
+        }
+        if ($line -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*)\[?([A-D])\]?\s*\(([^)]+)\)') {
+            $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim()
             break
         }
     }
 
-    # Priority 2: Line starting with option letter, e.g. "B (Quick Sort)"
+    # Priority 2: Line starting with option letter, e.g. "B: Quick Sort" or "[B] Quick Sort" or "B (Quick Sort)"
     if (-not $displayText) {
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             $line = $lines[$i]
-            if ($line -match '^([A-D]\s*[\)\.\:\-]\s*.+)$' -or $line -match '^([A-D]\s*\([^)]+\))$') {
-                $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
+            if ($line -match '^\[?([A-D])\]?\s*[:\.\-\)]\s*(.+)$') {
+                $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim().TrimEnd('.')
+                break
+            }
+            if ($line -match '^\[?([A-D])\]?\s*\(([^)]+)\)$') {
+                $displayText = "Ans: " + $matches[1].ToUpper() + ": " + $matches[2].Trim()
+                break
+            }
+            if ($line -match '^\[?([A-D])\]?\s*$') {
+                $displayText = "Ans: " + $matches[1].ToUpper()
                 break
             }
         }
     }
 
-    # Priority 3: Standalone 'X (Option Text)' anywhere in bottom lines
-    if (-not $displayText) {
-        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-            $line = $lines[$i]
-            if ($line -match '([A-D]\s*\([^)]+\))') {
-                $displayText = "Ans: " + $matches[1].Trim().TrimEnd('.')
-                break
-            }
-        }
-    }
-
-    # Priority 4: Bottom line starting with single letter like "B" or "B."
-    if (-not $displayText) {
-        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-            $line = $lines[$i]
-            if ($line -match '^[A-D]') {
-                $displayText = "Ans: " + $line.TrimEnd('.')
-                break
-            }
-        }
-    }
-
-    # Priority 5: Fallback - take ONLY the final line (NEVER combine lines into a paragraph!)
+    # Priority 3: Fallback - take ONLY the final line (never paragraphs!)
     if (-not $displayText) {
         $lastLine = if ($lines.Count -gt 0) { $lines[$lines.Count - 1] } else { $cleanRaw }
-        $displayText = if ($lastLine -match '^(Ans\s*[:\-])') { $lastLine } else { "Ans: $lastLine" }
+        $displayText = if ($lastLine -match '(?i)^(Ans\s*[:\-])') { $lastLine } else { "Ans: $lastLine" }
     }
 
-    # If displayText is only a single letter like "Ans: A" or "Ans: B", automatically look up option text from question!
-    if ($displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])\s*$' -or $displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])[\.\:\-]?\s*$') {
+    # If displayText is only a single letter like "Ans: A" or "Ans: B", look up option text from FRESH question OCR!
+    if ($displayText -match '^(?i)Ans\s*[:\-]\s*([A-D])[\.\:\-]?\s*$') {
         $optLetter = $matches[1].ToUpper()
         if ($script:latestOCRText) {
-            $optMatch = [regex]::Match($script:latestOCRText, "(?im)^\s*(?:\[?" + $optLetter + "\]?[\.\:\)\-]?)\s+([^
-]+)")
+            $optPattern = "(?im)^\s*(?:\[?" + $optLetter + "\]?[\.\:\)\-]?)\s+([^\r\n]+)"
+            $optMatch = [regex]::Match($script:latestOCRText, $optPattern)
             if ($optMatch.Success) {
                 $optContent = $optMatch.Groups[1].Value.Trim()
                 if ($optContent.Length -gt 55) { $optContent = $optContent.Substring(0, 52).TrimEnd() + "..." }
-                $displayText = "Ans: $optLetter. $optContent"
+                $displayText = "Ans: " + $optLetter + ": " + $optContent
             }
         }
     }
@@ -937,58 +926,57 @@ function Start-GeminiVisionWorker {
             function Invoke-GeminiVision {
                 param([string]$B64)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the screenshot and options. Output the correct option letter AND the option text strictly in this format: Ans: X: Option Content. Example: Ans: A: Only Conclusion I and II follow. You must always include both the option letter AND the full option text. Never output just the letter alone. Your entire response must be just that single line."
+                $prompt = "You are an automated exam solver. Do NOT explain. Do NOT show reasoning. Look at the screenshot and options. Output the correct option letter AND the option text strictly in this format: Ans: [Letter]: [Option Text]. Example format: Ans: C: London. Never default or bias toward A. Your entire response must be just that single line."
                 
-                # Find working gemini key
-                $geminiKey = $null
+                # Loop through all gemini keys until one succeeds
                 foreach ($k in $aiKeys) {
-                    if ($k.Provider -eq 'gemini') { $geminiKey = $k.Key; break }
-                }
-                if (-not $geminiKey) { return $null }
+                    if ($k.Provider -ne 'gemini') { continue }
+                    $geminiKey = $k.Key
 
-                try {
-                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-                    $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$geminiKey"
-                    $body = @{
-                        contents = @(@{
-                            parts = @(
-                                @{
-                                    inline_data = @{
-                                        mime_type = "image/png"
-                                        data      = $B64
-                                    }
-                                },
-                                @{ text = $prompt }
-                            )
-                        })
-                    } | ConvertTo-Json -Depth 6
+                    try {
+                        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                        $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$geminiKey"
+                        $body = @{
+                            contents = @(@{
+                                parts = @(
+                                    @{
+                                        inline_data = @{
+                                            mime_type = "image/png"
+                                            data      = $B64
+                                        }
+                                    },
+                                    @{ text = $prompt }
+                                )
+                            })
+                        } | ConvertTo-Json -Depth 6
 
-                    $req = [System.Net.HttpWebRequest]::Create($url)
-                    $req.Method = "POST"
-                    $req.ContentType = "application/json; charset=utf-8"
-                    $req.Timeout = 12000
-                    $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-                    $req.ContentLength = $postBytes.Length
-                    $postStream = $req.GetRequestStream()
-                    $postStream.Write($postBytes, 0, $postBytes.Length)
-                    $postStream.Close()
+                        $req = [System.Net.HttpWebRequest]::Create($url)
+                        $req.Method = "POST"
+                        $req.ContentType = "application/json; charset=utf-8"
+                        $req.Timeout = 9000
+                        $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                        $req.ContentLength = $postBytes.Length
+                        $postStream = $req.GetRequestStream()
+                        $postStream.Write($postBytes, 0, $postBytes.Length)
+                        $postStream.Close()
 
-                    $httpResp = $req.GetResponse()
-                    $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
-                    $rawJson = $sr.ReadToEnd()
-                    $sr.Close()
-                    $httpResp.Close()
+                        $httpResp = $req.GetResponse()
+                        $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                        $rawJson = $sr.ReadToEnd()
+                        $sr.Close()
+                        $httpResp.Close()
 
-                    $gResp = $rawJson | ConvertFrom-Json
-                    if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
-                        $rawAns = [string]$gResp.candidates[0].content.parts[0].text
-                        if ($rawAns) {
-                            $sw.Stop()
-                            $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
-                            return @{ Ans = $rawAns.Trim(); Tag = "[Gemini Vision • ${sec}s]" }
+                        $gResp = $rawJson | ConvertFrom-Json
+                        if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
+                            $rawAns = [string]$gResp.candidates[0].content.parts[0].text
+                            if ($rawAns) {
+                                $sw.Stop()
+                                $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                                return @{ Ans = $rawAns.Trim(); Tag = "[Gemini Vision   ${sec}s]" }
+                            }
                         }
-                    }
-                } catch {}
+                    } catch { continue }
+                }
                 return $null
             }
             Invoke-GeminiVision -B64 $imgB64
@@ -1050,7 +1038,7 @@ $btnCap.Add_Click({
         if ($script:ocrTimer) { try { $script:ocrTimer.Stop() } catch {} }
         if ($script:aiPollTimer) { try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}; $script:aiPollTimer = $null }
         Dismiss-AIAnswer
-
+        $script:latestOCRText = ""
         $script:ocrBusy = $true
         $script:ocrPollN = 0
         $bar.Hide()
@@ -1170,7 +1158,7 @@ $script:ocrTimer.Add_Tick({
                     $ps.AddScript({
                         function Invoke-AIAnswerLocal {
                             param([string]$Q)
-                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: X: Option Content. Example: Ans: A: Only Conclusion I and II follow. You must always include both the option letter AND the full option text. Never output just the letter alone. Your entire response must be just that single line."
+                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: [Letter]: [Option Text]. Example: Ans: C: London. Never default or bias toward A. Your entire response must be just that single line."
                             $idx = $aiKeyIndex; $tried = 0
                             while ($tried -lt $aiKeys.Count) {
                                 $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
@@ -1315,7 +1303,7 @@ $btnOCR.Add_Click({
         if ($script:ocrTimer) { try { $script:ocrTimer.Stop() } catch {} }
         if ($script:aiPollTimer) { try { $script:aiPollTimer.Stop(); $script:aiPollTimer.Dispose() } catch {}; $script:aiPollTimer = $null }
         Dismiss-AIAnswer
-
+        $script:latestOCRText = ""
         $script:ocrBusy = $true
         $script:ocrPollN = 0
         $btnOCR.BackColor = [System.Drawing.Color]::FromArgb(255,180,90,5)
