@@ -1169,86 +1169,197 @@ $script:ocrTimer.Add_Tick({
                     $ps = [System.Management.Automation.PowerShell]::Create()
                     $ps.Runspace = $rs
                     $ps.AddScript({
-                        function Invoke-AIAnswerLocal {
-                            param([string]$Q)
-                            $prompt = "You are an automated multiple-choice exam solver. Do NOT explain. Do NOT show reasoning. Output the correct option letter AND the option text strictly in this format: Ans: [Letter] [[Option Text]]. Example: Ans: C [LKJ]. Never default or bias toward A. Your entire response must be just that single line."
-                            $idx = $aiKeyIndex; $tried = 0
-                            while ($tried -lt $aiKeys.Count) {
-                                $entry = $aiKeys[$idx % $aiKeys.Count]; $idx++; $tried++
-                                $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                                try {
-                                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-                                    if ($entry.Provider -eq 'gemini') {
-                                        $gUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$($entry.Key)"
-                                        $gBody = @{
-                                            contents = @(@{
-                                                parts = @(@{ text = "$prompt`n`nQuestion & Options:`n$Q" })
-                                            })
-                                        } | ConvertTo-Json -Depth 6
-                                        $req = [System.Net.HttpWebRequest]::Create($gUrl)
-                                        $req.Method = "POST"
-                                        $req.ContentType = "application/json; charset=utf-8"
-                                        $req.Timeout = 6000
-                                        $postBytes = [System.Text.Encoding]::UTF8.GetBytes($gBody)
-                                        $req.ContentLength = $postBytes.Length
-                                        $postStream = $req.GetRequestStream()
-                                        $postStream.Write($postBytes, 0, $postBytes.Length)
-                                        $postStream.Close()
-                                        $httpResp = $req.GetResponse()
-                                        $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
-                                        $rawJson = $sr.ReadToEnd()
-                                        $sr.Close()
-                                        $httpResp.Close()
-                                        $gResp = $rawJson | ConvertFrom-Json
-                                        if ($gResp -and $gResp.candidates -and $gResp.candidates[0].content.parts) {
-                                            $rawAns = [string]$gResp.candidates[0].content.parts[0].text
-                                            if ($rawAns) {
-                                                $sw.Stop()
-                                                $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
-                                                return @{ Ans = $rawAns.Trim(); Tag = "[Gemini • ${sec}s]" }
-                                            }
-                                        }
-                                    } elseif ($entry.Provider -eq 'groq') {
-                                        # Groq: ultra-fast 0.3s inference on qwen/qwen3.8-27b
-                                        $body = @{
-                                            model       = 'qwen/qwen3.8-27b'
-                                            messages    = @(@{ role='system'; content=$prompt },@{ role='user'; content=$Q })
-                                            max_tokens  = 45
-                                            temperature = 0.0
-                                        } | ConvertTo-Json -Depth 5
-                                        $url = 'https://api.groq.com/openai/v1/chat/completions'
-                                        $req = [System.Net.HttpWebRequest]::Create($url)
-                                        $req.Method = "POST"
-                                        $req.ContentType = "application/json; charset=utf-8"
-                                        $req.Headers.Add("Authorization", "Bearer $($entry.Key)")
-                                        $req.UserAgent = "Mozilla/5.0"
-                                        $req.Timeout = 5000
-                                        $postBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-                                        $req.ContentLength = $postBytes.Length
-                                        $postStream = $req.GetRequestStream()
-                                        $postStream.Write($postBytes, 0, $postBytes.Length)
-                                        $postStream.Close()
-                                        $httpResp = $req.GetResponse()
-                                        $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
-                                        $rawJson = $sr.ReadToEnd()
-                                        $sr.Close()
-                                        $httpResp.Close()
-                                        $resp = $rawJson | ConvertFrom-Json
-                                        if ($resp -and $resp.choices -and $resp.choices.Count -gt 0) {
-                                            $msg = $resp.choices[0].message
-                                            $rawAns = if ($msg.content) { [string]$msg.content } else { [string]$msg.reasoning }
-                                            if ($rawAns) {
-                                                $sw.Stop()
-                                                $sec = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
-                                                return @{ Ans = $rawAns.Trim(); Tag = "[Groq • ${sec}s]" }
-                                            }
-                                        }
-                                    }
-                                } catch { continue }
+                        function Extract-AnsFromText {
+                            param([string]$Text)
+                            # Search bottom-up for any Ans: / ANSWER: / boxed / **B** pattern
+                            $lines = ($Text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                            for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                                $l = $lines[$i]
+                                if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|^ANSWER\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]?([^\]\)\n]*)') {
+                                    $letter = $matches[1].ToUpper()
+                                    $txt = $matches[2].Trim().TrimEnd('])')
+                                    return "$letter|$txt"
+                                }
+                                if ($l -match '(?i)(?:answer\s+is\s+|\\boxed\{)\s*\*{0,2}([A-D])\*{0,2}') {
+                                    return $matches[1].ToUpper() + '|'
+                                }
+                                if ($l -match '\*\*([A-D])\*\*') {
+                                    return $matches[1].ToUpper() + '|'
+                                }
                             }
                             return $null
                         }
-                        Invoke-AIAnswerLocal -Q $capturedTxt
+
+                        function Invoke-OneGroq {
+                            param([string]$Key, [string]$Q, [string]$Prompt)
+                            try {
+                                $body = @{
+                                    model       = 'qwen/qwen3.8-27b'
+                                    messages    = @(@{ role='system'; content=$Prompt }, @{ role='user'; content=$Q })
+                                    max_tokens  = 2500
+                                    temperature = 0.0
+                                } | ConvertTo-Json -Depth 5
+                                $req = [System.Net.HttpWebRequest]::Create('https://api.groq.com/openai/v1/chat/completions')
+                                $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"
+                                $req.Headers.Add("Authorization", "Bearer $Key"); $req.UserAgent = "Mozilla/5.0"; $req.Timeout = 10000
+                                $b = [System.Text.Encoding]::UTF8.GetBytes($body)
+                                $req.ContentLength = $b.Length
+                                $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
+                                $hr = $req.GetResponse()
+                                $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                $r = $raw | ConvertFrom-Json
+                                if ($r -and $r.choices -and $r.choices.Count -gt 0) {
+                                    $m = $r.choices[0].message
+                                    return if ($m.content) { [string]$m.content } else { [string]$m.reasoning }
+                                }
+                            } catch {}
+                            return $null
+                        }
+
+                        function Invoke-OneGemini {
+                            param([string]$Key, [string]$Q, [string]$Prompt)
+                            try {
+                                $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$Key"
+                                $body = @{ contents = @(@{ parts = @(@{ text = "$Prompt`n`nQuestion & Options:`n$Q" }) }) } | ConvertTo-Json -Depth 6
+                                $req = [System.Net.HttpWebRequest]::Create($url)
+                                $req.Method = "POST"; $req.ContentType = "application/json; charset=utf-8"; $req.Timeout = 9000
+                                $b = [System.Text.Encoding]::UTF8.GetBytes($body)
+                                $req.ContentLength = $b.Length
+                                $s = $req.GetRequestStream(); $s.Write($b, 0, $b.Length); $s.Close()
+                                $hr = $req.GetResponse()
+                                $sr = New-Object System.IO.StreamReader($hr.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                                $raw = $sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                $r = $raw | ConvertFrom-Json
+                                if ($r -and $r.candidates -and $r.candidates[0].content.parts) {
+                                    return [string]$r.candidates[0].content.parts[0].text
+                                }
+                            } catch {}
+                            return $null
+                        }
+
+                        # OPTIMIZED PROMPT: allows reasoning but ends with Ans: line
+                        $prompt = "Solve this multiple-choice question. Think through it. On the LAST LINE output only: Ans: [Letter] [[option text]]. Example: Ans: B [One]"
+
+                        # Fire all keys in parallel sub-runspaces for majority voting
+                        $groqKeys  = @($aiKeys | Where-Object { $_.Provider -eq 'groq' } | Select-Object -ExpandProperty Key)
+                        $geminiKeys = @($aiKeys | Where-Object { $_.Provider -eq 'gemini' } | Select-Object -ExpandProperty Key -First 1)
+
+                        $jobs = @()
+                        foreach ($gk in $groqKeys) {
+                            $rs2 = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                            $rs2.ApartmentState = 'STA'; $rs2.ThreadOptions = 'ReuseThread'; $rs2.Open()
+                            $rs2.SessionStateProxy.SetVariable('gKey', $gk)
+                            $rs2.SessionStateProxy.SetVariable('gQ', $capturedTxt)
+                            $rs2.SessionStateProxy.SetVariable('gP', $prompt)
+                            $ps2 = [System.Management.Automation.PowerShell]::Create()
+                            $ps2.Runspace = $rs2
+                            $ps2.AddScript({
+                                function Invoke-OneGroq {
+                                    param([string]$Key, [string]$Q, [string]$Prompt)
+                                    try {
+                                        $body = @{
+                                            model = 'qwen/qwen3.8-27b'
+                                            messages = @(@{ role='system'; content=$Prompt }, @{ role='user'; content=$Q })
+                                            max_tokens = 2500; temperature = 0.0
+                                        } | ConvertTo-Json -Depth 5
+                                        $req = [System.Net.HttpWebRequest]::Create('https://api.groq.com/openai/v1/chat/completions')
+                                        $req.Method="POST"; $req.ContentType="application/json; charset=utf-8"
+                                        $req.Headers.Add("Authorization","Bearer $Key"); $req.UserAgent="Mozilla/5.0"; $req.Timeout=10000
+                                        $b=[System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength=$b.Length
+                                        $s=$req.GetRequestStream(); $s.Write($b,0,$b.Length); $s.Close()
+                                        $hr=$req.GetResponse(); $sr=New-Object System.IO.StreamReader($hr.GetResponseStream(),[System.Text.Encoding]::UTF8)
+                                        $raw=$sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                        $r=$raw|ConvertFrom-Json
+                                        if ($r -and $r.choices -and $r.choices.Count -gt 0) {
+                                            $m=$r.choices[0].message
+                                            return if ($m.content) { [string]$m.content } else { [string]$m.reasoning }
+                                        }
+                                    } catch {}; return $null
+                                }
+                                Invoke-OneGroq -Key $gKey -Q $gQ -Prompt $gP
+                            }) | Out-Null
+                            $jobs += @{ PS=$ps2; RS=$rs2; Handle=$ps2.BeginInvoke() }
+                        }
+                        if ($geminiKeys.Count -gt 0) {
+                            $rs3 = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                            $rs3.ApartmentState = 'STA'; $rs3.ThreadOptions = 'ReuseThread'; $rs3.Open()
+                            $rs3.SessionStateProxy.SetVariable('gmKey', $geminiKeys[0])
+                            $rs3.SessionStateProxy.SetVariable('gQ',  $capturedTxt)
+                            $rs3.SessionStateProxy.SetVariable('gP',  $prompt)
+                            $ps3 = [System.Management.Automation.PowerShell]::Create(); $ps3.Runspace = $rs3
+                            $ps3.AddScript({
+                                function Invoke-OneGemini {
+                                    param([string]$Key, [string]$Q, [string]$Prompt)
+                                    try {
+                                        $url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$Key"
+                                        $body=@{ contents=@(@{ parts=@(@{ text="$Prompt`n`nQuestion & Options:`n$Q" }) }) } | ConvertTo-Json -Depth 6
+                                        $req=[System.Net.HttpWebRequest]::Create($url); $req.Method="POST"; $req.ContentType="application/json; charset=utf-8"; $req.Timeout=9000
+                                        $b=[System.Text.Encoding]::UTF8.GetBytes($body); $req.ContentLength=$b.Length
+                                        $s=$req.GetRequestStream(); $s.Write($b,0,$b.Length); $s.Close()
+                                        $hr=$req.GetResponse(); $sr=New-Object System.IO.StreamReader($hr.GetResponseStream(),[System.Text.Encoding]::UTF8)
+                                        $raw=$sr.ReadToEnd(); $sr.Close(); $hr.Close()
+                                        $r=$raw|ConvertFrom-Json
+                                        if ($r -and $r.candidates -and $r.candidates[0].content.parts) { return [string]$r.candidates[0].content.parts[0].text }
+                                    } catch {}; return $null
+                                }
+                                Invoke-OneGemini -Key $gmKey -Q $gQ -Prompt $gP
+                            }) | Out-Null
+                            $jobs += @{ PS=$ps3; RS=$rs3; Handle=$ps3.BeginInvoke() }
+                        }
+
+                        # Wait max 12 seconds for all jobs
+                        $deadline = [DateTime]::UtcNow.AddSeconds(12)
+                        while ($jobs | Where-Object { -not $_.Handle.IsCompleted }) {
+                            if ([DateTime]::UtcNow -gt $deadline) { break }
+                            Start-Sleep -Milliseconds 100
+                        }
+
+                        # Collect raw answers
+                        $rawAnswers = @()
+                        foreach ($j in $jobs) {
+                            try {
+                                if ($j.Handle.IsCompleted) {
+                                    $res = $j.PS.EndInvoke($j.Handle)
+                                    $txt = $res | Select-Object -Last 1
+                                    if ($txt) { $rawAnswers += [string]$txt }
+                                }
+                            } catch {}
+                            try { $j.PS.Dispose() } catch {}
+                            try { $j.RS.Close(); $j.RS.Dispose() } catch {}
+                        }
+
+                        # Extract Ans: from each and majority vote
+                        function ExtractAns([string]$text) {
+                            $lines = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                            for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                                $l = $lines[$i]
+                                if ($l -match '(?i)(?:^Ans(?:wer)?\s*[:\-]\s*|^ANSWER\s*[:\-]\s*)\[?([A-D])\]?\s*[\[\(]?([^\]\)\n]*)') {
+                                    return @{ L=$matches[1].ToUpper(); C=$matches[2].Trim().TrimEnd(']).') }
+                                }
+                                if ($l -match '(?i)answer\s+is\s+\*{0,2}([A-D])\*{0,2}') { return @{ L=$matches[1].ToUpper(); C='' } }
+                                if ($l -match '\*\*([A-D])\*\*') { return @{ L=$matches[1].ToUpper(); C='' } }
+                            }
+                            return $null
+                        }
+
+                        $votes = @{}
+                        $contents = @{}
+                        foreach ($ra in $rawAnswers) {
+                            $ex = ExtractAns $ra
+                            if ($ex) {
+                                $ltr = $ex.L
+                                $votes[$ltr] = ($votes[$ltr] + 1)
+                                if (-not $contents[$ltr]) { $contents[$ltr] = $ex.C }
+                            }
+                        }
+
+                        if ($votes.Count -gt 0) {
+                            $bestLetter = ($votes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1).Key
+                            $bestContent = $contents[$bestLetter]
+                            return @{ Ans = "Ans: $bestLetter [$bestContent]"; Tag = "" }
+                        }
+                        return $null
                     }) | Out-Null
                     $script:aiRs = $rs
                     $script:aiPs = $ps
