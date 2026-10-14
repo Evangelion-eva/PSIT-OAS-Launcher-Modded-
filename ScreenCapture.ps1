@@ -180,7 +180,7 @@ function Invoke-AIAnswer {
     if ($script:aiKeys.Count -eq 0) { return $null }
 
     $prompt = "You are an expert exam solver. Solve this multiple-choice exam question. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
-    $models = @('gemini-2.5-flash', 'gemini-3-flash-preview')
+    $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
     foreach ($entry in $script:aiKeys) {
         if ($entry.Provider -ne 'gemini') { continue }
@@ -941,7 +941,7 @@ function Start-GeminiVisionWorker {
             function Invoke-GeminiVision {
                 param([string]$B64)
                 $prompt = "You are an expert exam solver. Look at this exam question image. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
-                $models = @('gemini-2.5-flash', 'gemini-3-flash-preview')
+                $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
                 Write-Host ""
                 Write-Host "=== IMAGE MODE AI SOLVE (Gemini Vision) ===" -ForegroundColor Yellow
@@ -1186,7 +1186,7 @@ $script:ocrTimer.Add_Tick({
                         }
 
                         $prompt = "You are an expert exam solver. Solve this multiple-choice exam question. Determine the correct option. On the VERY LAST LINE, output ONLY: Ans: [Letter] [Option Text]. Example: Ans: B [One]"
-                        $models = @('gemini-2.5-flash', 'gemini-3-flash-preview')
+                        $models = @('gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash')
 
                         Write-Host ""
                         Write-Host "=== OCR TEXT MODE AI SOLVE ===" -ForegroundColor Yellow

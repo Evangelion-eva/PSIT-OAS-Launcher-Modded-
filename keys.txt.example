@@ -1,7 +1,14 @@
-# PSIT OAS AI Keys — one per line
-# Format:  groq:<key>   or   openrouter:<key>
+# PSIT OAS AI Keys & Integration Tokens — one per line
+# Format:
+#   gemini:<key>       (Google Gemini AI Studio API key or OAuth token)
+#   groq:<key>         (Groq API key)
+#   openrouter:<key>   (OpenRouter API key)
+#   notion:<token>     (Notion Integration API token secret_...)
+#
 # Lines starting with # are ignored.
 # Add as many keys as you want — they rotate automatically on rate limit.
 #
+gemini:YOUR_GEMINI_KEY_HERE
 groq:YOUR_GROQ_KEY_HERE
 openrouter:YOUR_OPENROUTER_KEY_HERE
+notion:secret_YOUR_NOTION_INTEGRATION_TOKEN_HERE

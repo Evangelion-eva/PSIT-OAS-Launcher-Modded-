@@ -9,3 +9,6 @@ wv2sdk/
 *.orig.exe
 __pycache__/
 Launch
+image.png
+*.log
+keys_health_status.json

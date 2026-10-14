@@ -192,6 +192,28 @@ def query_ai_solver(question_text):
         provider = entry["provider"]
         api_key = entry["key"]
 
+        if provider == "gemini":
+            gemini_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-3.8-flash"]
+            for gm in gemini_models:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{gm}:generateContent?key={api_key}"
+                body = {
+                    "contents": [{"parts": [{"text": f"{prompt}\n\nQuestion & Options:\n{question_text}"}]}],
+                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.0}
+                }
+                headers = {"Content-Type": "application/json; charset=utf-8"}
+                try:
+                    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        candidates = data.get("candidates", [])
+                        if candidates and "parts" in candidates[0].get("content", {}):
+                            raw_ans = candidates[0]["content"]["parts"][0].get("text", "")
+                            if raw_ans:
+                                return parse_ai_response(raw_ans)
+                except Exception:
+                    continue
+            continue
+
         model = "llama-3.3-70b-versatile" if provider == "groq" else "openrouter/free"
         url = (
             "https://api.groq.com/openai/v1/chat/completions"

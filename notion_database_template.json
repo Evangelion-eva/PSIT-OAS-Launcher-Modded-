@@ -1,0 +1,120 @@
+{
+  "title": "PSIT OAS Launcher Engineering & Audit Tracker",
+  "description": "Notion tracking database export for PSIT OAS Launcher (Modded)",
+  "last_synced": "2026-10-14T12:03:11Z",
+  "schema_properties": {
+    "Task ID": {
+      "type": "rich_text"
+    },
+    "Name": {
+      "type": "title"
+    },
+    "Category": {
+      "type": "select",
+      "options": [
+        "Bug",
+        "Feature",
+        "Ops"
+      ]
+    },
+    "Priority": {
+      "type": "select",
+      "options": [
+        "P0",
+        "P1",
+        "P2"
+      ]
+    },
+    "Status": {
+      "type": "status",
+      "options": [
+        "Done",
+        "In progress",
+        "Not started"
+      ]
+    }
+  },
+  "records": [
+    {
+      "id": "BUG-01",
+      "title": "Whole Screen Capture (Low Accuracy & Hallucinations)",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "OCR snapped `(0, 0, screen.Width, screen.Height)`. Included candidate name, time countdown, palette grid (1..30), legend, and bottom buttons. Mixed numbers into question text.",
+      "solution": "Implemented `Get-QuestionCaptureArea` targeting only the question/options quadrant (top 8.5%\u201388.5%, left 1.5%\u201375%). Added `Clean-OCRQuestionText` to strip noise.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-02",
+      "title": "AI Wrong Answers & Truncated Explanations",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "Groq model was set to non-existent `'qwen/qwen3.8-27b'`. OpenRouter token limit was only 250, cutting off reasoning models before outputting `Ans: X`.",
+      "solution": "Updated Groq model to `'llama-3.3-70b-versatile'` (with instant fallback). Increased token limit to 450, enforced bottom-up parsing for final answer line.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-03",
+      "title": "Button Fails on 2nd / 3rd Rapid Click",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "1) Mouse drag threshold was 3px; natural double-click twitch set `suppressClick = true`. 2) `$script:ocrBusy` blocked subsequent clicks while background timers ran.",
+      "solution": "1) Raised drag threshold to 10px. 2) Made click handler cancel/reset pending timers and immediately restart on new question.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-04",
+      "title": "Clicking Answer Text Fails to Hide It",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "WinForms `TransparencyKey = Color.White` treated all white pixels as click-through transparent. Only 1px font stroke registered clicks.",
+      "solution": "Replaced click-through white box with sleek dark HUD badge (`FromArgb(24, 26, 36)`). Every pixel on card + dedicated `\u00d7` dismiss button captures clicks.",
+      "status": "Verified"
+    },
+    {
+      "id": "BUG-05",
+      "title": "Text Selection Broken on Test",
+      "category": "Bug",
+      "priority": "P0",
+      "root_cause": "In `OASUnlocker.dll`, capturing `selectstart` listener executed `e.stopImmediatePropagation()`, aborting browser selection engine.",
+      "solution": "Patched `OASUnlocker.dll` `#US` payload to neutralize `preventDefault` without stopping event propagation. Updated `test_page.html` selection CSS & event guards.",
+      "status": "Verified"
+    },
+    {
+      "id": "OPS-01",
+      "title": "REA Setup (`morluto/rea`)",
+      "category": "Ops",
+      "priority": "P1",
+      "root_cause": "Initialized and registered REA agents integration for inspecting .NET assemblies and native binaries.",
+      "solution": "Ran `npx -y rea-agents setup --yes --all-detected`. Verified metadata extraction on `PSITOAS.exe` and `OASUnlocker.dll`.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-01",
+      "title": "Linux Native Support & Compiled Binary",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Linux systems lack native Win32 PowerShell / WinForms / Windows OCR.",
+      "solution": "Created native Python/Tkinter engine (`launch_linux.py`) with `libtesseract` OCR, and compiled native 64-bit ELF executable binary (`Launch`).",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-02",
+      "title": "Targeted High-Quality Snip & AI Solver on Screenshot",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Screenshot button previously captured full screen to clipboard only.",
+      "solution": "Blue Dot now snips targeted question quadrant in uncompressed 32bpp, copies to clipboard, and instantly triggers AI solver to display HUD answer.",
+      "status": "Verified"
+    },
+    {
+      "id": "FEAT-03",
+      "title": "Zero-Privilege Stealth One-Liner Launchers",
+      "category": "Feature",
+      "priority": "P1",
+      "root_cause": "Running scripts opened consoles or exposed plaintext API keys in CLI history.",
+      "solution": "Built base64 in-memory key injection with completely hidden background window styles (`-WindowStyle Hidden` / `nohup`). Opens strictly the 3 dots.",
+      "status": "Verified"
+    }
+  ]
+}

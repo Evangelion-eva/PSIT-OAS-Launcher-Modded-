@@ -76,17 +76,49 @@ PSIT OAS originally locks down the browser window to block right-clicks, disable
 
 ## AI Setup & Key Rotation (`keys.txt`)
 
-The installer comes pre-bundled with working keys, but if you are running from source or want to use your own:
+The launcher supports automatic rotation and fallbacks across **Google Gemini** (Text + Multimodal Vision), **Groq** (Llama-3.3-70b), and **OpenRouter**:
 
 1. Duplicate `keys.txt.example` to `keys.txt`:
    ```txt
-   # PSIT OAS AI Keys — one per line
-   # Format:  groq:<key>   or   openrouter:<key>
-   # Add as many keys as you want — they rotate automatically on rate limit.
+   # PSIT OAS AI Keys & Integration Tokens — one per line
+   gemini:YOUR_GEMINI_KEY_HERE
    groq:gsk_your_groq_key_here
    openrouter:sk-or-v1-your_openrouter_key_here
+   notion:secret_your_notion_token_here
    ```
-2. Any number of Groq and OpenRouter keys can be added. If one hits a rate limit or returns an error, the engine seamlessly rotates to the next key.
+2. Any number of Gemini, Groq, and OpenRouter keys can be added. If one hits a rate limit (429) or temporary demand spike (503), the engine automatically falls back to healthy models and rotated keys.
+
+---
+
+## 🧪 Key Health Diagnostics & Testing Suite
+
+Before an exam, test your API keys live with realistic prompts and measure latencies:
+
+```bash
+# Test all configured keys and view colorized diagnostics
+python test_keys.py
+
+# Export machine-readable JSON status report
+python test_keys.py --json
+
+# On Windows PowerShell without Python:
+powershell -ExecutionPolicy Bypass -File .\Test-Keys.ps1
+```
+
+---
+
+## 📑 Real Notion Project Tracking & Sync
+
+Engineering audit logs, bug histories, and live diagnostic statuses can be synced to Notion:
+
+```bash
+# View interactive Notion tracker board in console
+python notion_tracker.py
+
+# Sync tasks and bug reports directly to your Notion database via official Notion API:
+python notion_tracker.py --sync --token "secret_your_token" --database-id "your_db_id"
+```
+See [NOTION_TRACKING.md](file:///c:/extracted/NOTION_TRACKING.md) for full project audit details.
 
 ---
 
